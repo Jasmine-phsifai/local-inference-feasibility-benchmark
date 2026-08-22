@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "candidates": [
+    {
+      "id": "rapidocr_cpu",
+      "task": "ocr",
+      "role": "fast conventional Chinese and English OCR",
+      "status": "enabled",
+      "environment": "OCRLLM",
+      "manifest": "environments/rapidocr_cpu/requirements.txt",
+      "worker": "workers/rapidocr_worker.py",
+      "model": "RapidOCR default PP-OCR models",
+      "runtime_pin": "rapidocr 3.9.2; onnxruntime 1.23.2",
+      "official_url": "https://github.com/RapidAI/RapidOCR",
+      "configs": [
+        {"threads": 4, "workers": 1},
+        {"threads": 8, "workers": 1},
+        {"threads": 16, "workers": 1},
+        {"threads": 24, "workers": 1},
+        {"threads": 4, "workers": 2},
+        {"threads": 2, "workers": 4}
+      ]
+    },
+    {
+      "id": "faster_whisper_cpu",
+      "task": "asr",
+      "role": "optimized Whisper implementation",
+      "status": "enabled",
+      "environment": "local-bench-faster-whisper",
+      "manifest": "environments/faster_whisper_cpu/requirements.txt",
+      "worker": "workers/faster_whisper_worker.py",
+      "model": "Systran/faster-whisper-small int8",
+      "runtime_pin": "faster-whisper 1.2.1; CTranslate2 4.8.1",
+      "official_url": "https://github.com/SYSTRAN/faster-whisper",
+      "configs": [
+        {"threads": 4, "workers": 1, "compute_type": "int8"},
+        {"threads": 8, "workers": 1, "compute_type": "int8"},
+        {"threads": 16, "workers": 1, "compute_type": "int8"},
+        {"threads": 24, "workers": 1, "compute_type": "int8"}
+      ]
+    },
+    {
+      "id": "sensevoice_small_gguf_cpu",
+      "task": "asr",
+      "role": "efficient Chinese and multilingual ASR",
+      "status": "enabled",
+      "environment": "local-bench-control",
+      "worker": "workers/sensevoice_gguf_worker.py",
+      "model": "FunAudioLLM/SenseVoiceSmall-GGUF Q8",
+      "runtime_pin": "FunASR llama.cpp runtime-llamacpp-v0.1.9",
+      "official_url": "https://github.com/QwenAudio/SenseVoice",
+      "configs": [
+        {"backend": "cpu", "threads": 8},
+        {"backend": "cpu", "threads": 16},
+        {"backend": "cpu", "threads": 24},
+        {"backend": "vulkan", "threads": 16}
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_cpu",
+      "task": "asr_generative",
+      "role": "new compact generative multilingual ASR",
+      "status": "enabled",
+      "environment": "local-bench-qwen3-asr",
+      "manifest": "environments/qwen3_asr_cpu/requirements.txt",
+      "worker": "workers/qwen3_asr_worker.py",
+      "model": "Qwen/Qwen3-ASR-0.6B-hf",
+      "runtime_pin": "transformers 5.13.0; torch 2.13.0+cpu",
+      "official_url": "https://github.com/QwenLM/Qwen3-ASR",
+      "configs": [{"threads": 16}, {"threads": 24}]
+    },
+    {
+      "id": "ppocrv6_tiny_cpu",
+      "task": "ocr",
+      "role": "fast current conventional Chinese and English OCR",
+      "status": "enabled",
+      "environment": "local-bench-paddleocr",
+      "manifest": "environments/paddleocr_cpu/requirements.txt",
+      "conda_packages": ["vcomp14"],
+      "worker": "workers/paddleocr_worker.py",
+      "model": "PP-OCRv6 tiny detection and recognition",
+      "runtime_pin": "paddleocr 3.7.0; paddlepaddle 3.2.2",
+      "official_url": "https://github.com/PaddlePaddle/PaddleOCR",
+      "configs": [{"threads": 4}, {"threads": 8}, {"threads": 16}, {"threads": 24}, {"threads": 8, "batch_size": 3}]
+    },
+    {
+      "id": "ppocrv6_medium_cpu",
+      "task": "ocr",
+      "role": "strong current conventional Chinese and English OCR",
+      "status": "enabled",
+      "environment": "local-bench-paddleocr",
+      "manifest": "environments/paddleocr_cpu/requirements.txt",
+      "conda_packages": ["vcomp14"],
+      "worker": "workers/paddleocr_worker.py",
+      "model": "PP-OCRv6 medium detection and recognition",
+      "runtime_pin": "paddleocr 3.7.0; paddlepaddle 3.2.2",
+      "official_url": "https://github.com/PaddlePaddle/PaddleOCR",
+      "configs": [{"threads": 8}, {"threads": 16}, {"threads": 24}]
+    },
+    {
+      "id": "paddleocr_vl_1_6_cpu",
+      "task": "ocr_vlm",
+      "role": "compact OCR-oriented vision-language model",
+      "status": "enabled",
+      "environment": "local-bench-paddleocr",
+      "manifest": "environments/paddleocr_cpu/requirements.txt",
+      "conda_packages": ["vcomp14"],
+      "worker": "workers/paddleocr_vl_worker.py",
+      "model": "PaddlePaddle/PaddleOCR-VL-1.6 0.9B",
+      "runtime_pin": "paddleocr 3.7.0; paddlepaddle 3.2.2 native backend",
+      "official_url": "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6",
+      "configs": [{"threads": 16}, {"threads": 24}]
+    },
+    {
+      "id": "hunyuanocr_1_5_gguf_cpu",
+      "task": "ocr_vlm",
+      "role": "OCR-specialized VLM with official PC llama.cpp path",
+      "status": "experimental",
+      "environment": "external binary",
+      "model": "Tencent/HunyuanOCR-1.5 GGUF",
+      "official_url": "https://github.com/Tencent-Hunyuan/HunyuanOCR",
+      "configs": [{"threads": 16}, {"threads": 24}]
+    },
+    {
+      "id": "qwen2_5_vl_3b_gguf_intel",
+      "task": "ocr_vlm",
+      "role": "general VLM Intel CPU/iGPU comparator",
+      "status": "optional",
+      "environment": "external llama.cpp binary",
+      "model": "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF Q4_K_M",
+      "official_url": "https://github.com/ggml-org/llama.cpp",
+      "configs": [{"backend": "cpu", "threads": 24}, {"backend": "sycl", "threads": 16}]
+    }
+  ]
+}

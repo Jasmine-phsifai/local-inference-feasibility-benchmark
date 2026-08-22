@@ -1,0 +1,51 @@
+﻿{
+    "captured_at_utc":  "2026-08-22T19:42:41.7154552Z",
+    "os":  {
+               "caption":  "Microsoft Windows 11 Pro",
+               "version":  "10.0.26200",
+               "build":  "26200"
+           },
+    "cpu":  {
+                "name":  "Intel(R) Core(TM) Ultra 9 285K",
+                "physical_cores":  24,
+                "logical_processors":  24
+            },
+    "memory":  {
+                   "total_bytes":  68044021760,
+                   "available_bytes":  42850770944
+               },
+    "gpu":  [
+                {
+                    "name":  "GameViewer Virtual Display Adapter",
+                    "driver_version":  "15.6.5.199",
+                    "adapter_ram_bytes":  0,
+                    "status":  "OK"
+                },
+                {
+                    "name":  "Intel(R) Graphics",
+                    "driver_version":  "32.0.101.8801",
+                    "adapter_ram_bytes":  2147479552,
+                    "status":  "OK"
+                }
+            ],
+    "npu":  [
+
+            ],
+    "disks":  [
+                  {
+                      "name":  "C",
+                      "used_bytes":  84967075840,
+                      "free_bytes":  128516702208
+                  },
+                  {
+                      "name":  "D",
+                      "used_bytes":  262618898432,
+                      "free_bytes":  506594430976
+                  },
+                  {
+                      "name":  "E",
+                      "used_bytes":  1618956255232,
+                      "free_bytes":  381431054336
+                  }
+              ]
+}

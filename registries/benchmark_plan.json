@@ -1,0 +1,7 @@
+{
+  "audio_workload_hours": [2.5, 37.5, 375, 56000],
+  "ocr_workload_images": [[50, 80], [750, 1200], [7500, 12000], [1120000, 1790000]],
+  "resource_sample_interval_seconds": 0.25,
+  "candidate_timeout_seconds": 3600,
+  "generation_stop_tokens_per_second": 1.0
+}

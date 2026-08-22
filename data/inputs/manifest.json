@@ -1,0 +1,29 @@
+{
+  "disclosure": "Fallback synthetic inputs; not representative lecture data and not usable for quality scoring.",
+  "images": [
+    {
+      "path": "D:\\Pycharm\\VSCODErepos\\Local model runner and investigater\\data\\inputs\\generated\\synthetic_slide_1.png",
+      "kind": "synthetic_rendered_text",
+      "representative": false
+    },
+    {
+      "path": "D:\\Pycharm\\VSCODErepos\\Local model runner and investigater\\data\\inputs\\generated\\synthetic_slide_2.png",
+      "kind": "synthetic_rendered_text",
+      "representative": false
+    },
+    {
+      "path": "D:\\Pycharm\\VSCODErepos\\Local model runner and investigater\\data\\inputs\\generated\\synthetic_slide_3.png",
+      "kind": "synthetic_rendered_text",
+      "representative": false
+    }
+  ],
+  "audio": [
+    {
+      "path": "D:\\Pycharm\\VSCODErepos\\Local model runner and investigater\\data\\inputs\\public\\jfk.wav",
+      "duration_seconds": 11.0,
+      "kind": "public_domain_jfk_speech_from_whisper_cpp",
+      "representative": false,
+      "source": "https://github.com/ggml-org/whisper.cpp/blob/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav"
+    }
+  ]
+}

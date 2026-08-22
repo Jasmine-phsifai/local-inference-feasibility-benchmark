@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-inference-bench"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "jsonschema>=4.23,<5",
+  "pillow>=11,<13",
+  "psutil>=6,<8",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+local-inference-bench = "local_inference_bench.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,4 @@
+rapidocr==3.9.2
+onnxruntime==1.23.2
+opencv-python==4.13.0.92
+psutil>=6,<8

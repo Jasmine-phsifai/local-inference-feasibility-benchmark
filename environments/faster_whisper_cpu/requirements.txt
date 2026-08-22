@@ -1,0 +1,4 @@
+numpy==2.3.5
+ctranslate2==4.8.1
+faster-whisper==1.2.1
+psutil>=6,<8

@@ -1,0 +1,31 @@
+﻿{
+    "captured_at_utc":  "2026-08-22T20:40:28.6128215Z",
+    "note":  "Apparent file sizes; Conda hard links may reduce physical incremental disk use.",
+    "environments":  [
+                         {
+                             "environment":  "local-bench-control",
+                             "path":  "D:\\Anaconda\\envs\\local-bench-control",
+                             "apparent_bytes":  189810764
+                         },
+                         {
+                             "environment":  "local-bench-faster-whisper",
+                             "path":  "D:\\Anaconda\\envs\\local-bench-faster-whisper",
+                             "apparent_bytes":  444993324
+                         },
+                         {
+                             "environment":  "local-bench-paddleocr",
+                             "path":  "D:\\Anaconda\\envs\\local-bench-paddleocr",
+                             "apparent_bytes":  1247184266
+                         },
+                         {
+                             "environment":  "local-bench-qwen3-asr",
+                             "path":  "D:\\Anaconda\\envs\\local-bench-qwen3-asr",
+                             "apparent_bytes":  1682634679
+                         },
+                         {
+                             "environment":  "OCRLLM",
+                             "path":  "D:\\Anaconda\\envs\\OCRLLM",
+                             "apparent_bytes":  967666273
+                         }
+                     ]
+}
