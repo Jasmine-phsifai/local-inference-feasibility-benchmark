@@ -35,7 +35,16 @@
         {"processes": 2, "model_workers": 1, "threads_per_worker": 8},
         {"processes": 3, "model_workers": 1, "threads_per_worker": 6},
         {"processes": 4, "model_workers": 1, "threads_per_worker": 4},
-        {"processes": 6, "model_workers": 1, "threads_per_worker": 2}
+        {"processes": 6, "model_workers": 1, "threads_per_worker": 2},
+        {"processes": 1, "model_workers": 1, "threads_per_worker": 24},
+        {"processes": 1, "model_workers": 2, "threads_per_worker": 12},
+        {"processes": 1, "model_workers": 3, "threads_per_worker": 8},
+        {"processes": 1, "model_workers": 8, "threads_per_worker": 3},
+        {"processes": 1, "model_workers": 12, "threads_per_worker": 2},
+        {"processes": 1, "model_workers": 24, "threads_per_worker": 1},
+        {"processes": 3, "model_workers": 1, "threads_per_worker": 8},
+        {"processes": 6, "model_workers": 1, "threads_per_worker": 4},
+        {"processes": 12, "model_workers": 1, "threads_per_worker": 2}
       ]
     },
     {
@@ -52,7 +61,10 @@
         {"processes": 3, "threads_per_process": 4},
         {"processes": 4, "threads_per_process": 2},
         {"processes": 6, "threads_per_process": 2},
-        {"processes": 8, "threads_per_process": 1}
+        {"processes": 8, "threads_per_process": 1},
+        {"processes": 6, "threads_per_process": 3},
+        {"processes": 8, "threads_per_process": 2},
+        {"processes": 8, "threads_per_process": 3}
       ]
     },
     {
@@ -69,7 +81,23 @@
         {"processes": 3, "threads_per_process": 8},
         {"processes": 4, "threads_per_process": 4},
         {"processes": 6, "threads_per_process": 4},
-        {"processes": 8, "threads_per_process": 2}
+        {"processes": 8, "threads_per_process": 2},
+        {"processes": 5, "threads_per_process": 4},
+        {"processes": 6, "threads_per_process": 3},
+        {"processes": 8, "threads_per_process": 3}
+      ]
+    },
+    {
+      "id": "ppocrv6_medium_cpu",
+      "task": "ocr",
+      "environment": "local-bench-paddleocr",
+      "worker": "workers/paddleocr_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 4, "model_tier": "medium"},
+        {"processes": 1, "threads_per_process": 8, "model_tier": "medium"},
+        {"processes": 2, "threads_per_process": 8, "model_tier": "medium"},
+        {"processes": 3, "threads_per_process": 8, "model_tier": "medium"},
+        {"processes": 4, "threads_per_process": 4, "model_tier": "medium"}
       ]
     }
   ]

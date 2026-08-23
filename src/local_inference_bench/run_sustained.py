@@ -160,7 +160,7 @@ def _run_attempt(
         "workload": {
             "workload_class": workload["workload_class"],
             "items": workload["items"],
-            "warmup_item_id": workload["warmup_item_id"],
+            "warmup_item": workload["warmup_item"],
         },
         "phase": phase,
         "target_wall_seconds": target_wall_seconds,

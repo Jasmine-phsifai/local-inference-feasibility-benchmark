@@ -9,7 +9,12 @@ from pathlib import Path
 
 
 _SAMPLE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_WORKLOAD_CLASSES = {"generated_control", "public_course", "private_course"}
+_WORKLOAD_CLASSES = {
+    "generated_control",
+    "generated_quality_control",
+    "public_course",
+    "private_course",
+}
 
 
 def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
@@ -30,61 +35,90 @@ def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
     items = []
     seen_ids = set()
     for raw_item in raw_items:
-        if not isinstance(raw_item, dict):
-            raise ValueError("sustained workload items must be objects")
-        sample_id = raw_item.get("id")
-        if (
-            type(sample_id) is not str
-            or _SAMPLE_ID.fullmatch(sample_id) is None
-            or sample_id in seen_ids
-        ):
-            raise ValueError("sustained workload item IDs must be unique opaque IDs")
-        seen_ids.add(sample_id)
-        raw_path = raw_item.get("path")
-        if type(raw_path) is not str or not raw_path:
-            raise ValueError("sustained workload item path is invalid")
-        item_path = Path(raw_path)
-        if not item_path.is_absolute():
-            item_path = (path.parent / item_path).resolve()
-        if not item_path.is_file():
-            raise FileNotFoundError(f"sustained workload item is missing: {sample_id}")
-        item = {"id": sample_id, "path": str(item_path)}
-        if expected_task == "asr":
-            duration = raw_item.get("duration_seconds")
-            if (
-                isinstance(duration, bool)
-                or not isinstance(duration, (int, float))
-                or not 0 < float(duration) <= 7200
-            ):
-                raise ValueError("ASR workload duration_seconds is invalid")
-            item["duration_seconds"] = float(duration)
-            expected_speech = raw_item.get("expected_speech", True)
-            if type(expected_speech) is not bool:
-                raise ValueError("ASR workload expected_speech must be boolean")
-            item["expected_speech"] = expected_speech
-        else:
-            expected_text = raw_item.get("expected_text", True)
-            if type(expected_text) is not bool:
-                raise ValueError("OCR workload expected_text must be boolean")
-            item["expected_text"] = expected_text
-        items.append(item)
+        items.append(
+            _load_item(
+                raw_item,
+                manifest_path=path,
+                task=expected_task,
+                seen_ids=seen_ids,
+            )
+        )
 
-    warmup_item_id = document.get("warmup_item_id", items[0]["id"])
-    if warmup_item_id not in seen_ids:
-        raise ValueError("warmup_item_id must name a workload item")
+    raw_warmup = document.get("warmup")
+    if raw_warmup is None:
+        warmup_item_id = document.get("warmup_item_id", items[0]["id"])
+        if warmup_item_id not in seen_ids:
+            raise ValueError("warmup_item_id must name a workload item")
+        warmup_item = next(item for item in items if item["id"] == warmup_item_id)
+        fingerprint_items = items
+    else:
+        warmup_item = _load_item(
+            raw_warmup,
+            manifest_path=path,
+            task=expected_task,
+            seen_ids=seen_ids,
+        )
+        fingerprint_items = [*items, warmup_item]
     total_duration = sum(item.get("duration_seconds", 0.0) for item in items)
     return {
         "task": expected_task,
         "workload_class": workload_class,
         "items": items,
-        "warmup_item_id": warmup_item_id,
-        "fingerprint": _fingerprint_items(items, expected_task),
+        "warmup_item": warmup_item,
+        "fingerprint": _fingerprint_items(fingerprint_items, expected_task),
         "public_summary": {
             "workload_class": workload_class,
             "item_count": len(items),
             "total_duration_seconds": total_duration,
         },
     }
+
+
+def _load_item(
+    raw_item: object,
+    *,
+    manifest_path: Path,
+    task: str,
+    seen_ids: set[str],
+) -> dict:
+    if not isinstance(raw_item, dict):
+        raise ValueError("sustained workload items must be objects")
+    sample_id = raw_item.get("id")
+    if (
+        type(sample_id) is not str
+        or _SAMPLE_ID.fullmatch(sample_id) is None
+        or sample_id in seen_ids
+    ):
+        raise ValueError("sustained workload item IDs must be unique opaque IDs")
+    seen_ids.add(sample_id)
+    raw_path = raw_item.get("path")
+    if type(raw_path) is not str or not raw_path:
+        raise ValueError("sustained workload item path is invalid")
+    item_path = Path(raw_path)
+    if not item_path.is_absolute():
+        item_path = (manifest_path.parent / item_path).resolve()
+    if not item_path.is_file():
+        raise FileNotFoundError(f"sustained workload item is missing: {sample_id}")
+    item = {"id": sample_id, "path": str(item_path)}
+    if task == "asr":
+        duration = raw_item.get("duration_seconds")
+        if (
+            isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not 0 < float(duration) <= 7200
+        ):
+            raise ValueError("ASR workload duration_seconds is invalid")
+        item["duration_seconds"] = float(duration)
+        expected_speech = raw_item.get("expected_speech", True)
+        if type(expected_speech) is not bool:
+            raise ValueError("ASR workload expected_speech must be boolean")
+        item["expected_speech"] = expected_speech
+    else:
+        expected_text = raw_item.get("expected_text", True)
+        if type(expected_text) is not bool:
+            raise ValueError("OCR workload expected_text must be boolean")
+        item["expected_text"] = expected_text
+    return item
 
 
 def _fingerprint_items(items: list[dict], task: str) -> str:

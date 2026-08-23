@@ -122,11 +122,7 @@ def _worker_process(
         )
         load_seconds = time.perf_counter() - loaded_at
         items = request["workload"]["items"]
-        warmup = next(
-            item
-            for item in items
-            if item["id"] == request["workload"]["warmup_item_id"]
-        )
+        warmup = request["workload"]["warmup_item"]
         warmup_record = _recognize(engine, warmup, capture_prediction=False)
         ready_queue.put(
             {

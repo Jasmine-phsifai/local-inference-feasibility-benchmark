@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 AUDIO_DURATIONS_SECONDS = (900, 900, 900, 900, 1800)
+SCREEN_AUDIO_DURATIONS_SECONDS = (600, 600, 600, 600)
 FRAME_COUNT = 36
 EDGE_MARGIN_SECONDS = 300
 
@@ -30,8 +31,10 @@ def main() -> None:
     audio_offsets = _nonoverlapping_offsets(duration, AUDIO_DURATIONS_SECONDS)
     frame_offsets = _even_offsets(duration, FRAME_COUNT)
     audio_dir = args.output_dir / "audio"
+    screen_audio_dir = args.output_dir / "audio_screen"
     frame_dir = args.output_dir / "frames"
     audio_dir.mkdir(parents=True, exist_ok=True)
+    screen_audio_dir.mkdir(parents=True, exist_ok=True)
     frame_dir.mkdir(parents=True, exist_ok=True)
     args.workload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -52,6 +55,40 @@ def main() -> None:
             }
         )
 
+    warmup_destination = audio_dir / "warmup.wav"
+    _extract_audio(
+        args.ffmpeg,
+        args.source,
+        audio_offsets[0],
+        30,
+        warmup_destination,
+    )
+    warmup_item = {
+        "id": "warmup",
+        "path": str(warmup_destination.resolve()),
+        "duration_seconds": _media_duration(args.ffprobe, warmup_destination),
+        "expected_speech": True,
+    }
+    screen_audio_items = []
+    for index, (offset, segment_seconds) in enumerate(
+        zip(
+            audio_offsets,
+            SCREEN_AUDIO_DURATIONS_SECONDS,
+            strict=False,
+        ),
+        start=1,
+    ):
+        sample_id = f"screen_{index:03d}"
+        destination = screen_audio_dir / f"{sample_id}.wav"
+        _extract_audio(args.ffmpeg, args.source, offset, segment_seconds, destination)
+        screen_audio_items.append(
+            {
+                "id": sample_id,
+                "path": str(destination.resolve()),
+                "duration_seconds": _media_duration(args.ffprobe, destination),
+                "expected_speech": True,
+            }
+        )
     image_items = []
     for index, offset in enumerate(frame_offsets, start=1):
         sample_id = f"image_{index:03d}"
@@ -67,11 +104,15 @@ def main() -> None:
 
     _write_json(
         args.workload_dir / "local_private_asr.json",
-        _workload("asr", audio_items),
+        _workload("asr", audio_items, warmup=warmup_item),
     )
     _write_json(
         args.workload_dir / "local_private_ocr.json",
         _workload("ocr", image_items),
+    )
+    _write_json(
+        args.workload_dir / "local_private_asr_screen.json",
+        _workload("asr", screen_audio_items, warmup=warmup_item),
     )
     _write_json(
         args.output_dir / "private-source-offsets.json",
@@ -246,14 +287,18 @@ def _run_media_tool(command: list[str], operation: str) -> None:
         raise RuntimeError(f"{operation} failed")
 
 
-def _workload(task: str, items: list[dict]) -> dict:
-    return {
+def _workload(task: str, items: list[dict], *, warmup: dict | None = None) -> dict:
+    workload = {
         "schema_version": 1,
         "task": task,
         "workload_class": "private_course",
         "warmup_item_id": items[0]["id"],
         "items": items,
     }
+    if warmup is not None:
+        workload["warmup"] = warmup
+        workload.pop("warmup_item_id")
+    return workload
 
 
 def _write_json(path: Path, value: dict) -> None:

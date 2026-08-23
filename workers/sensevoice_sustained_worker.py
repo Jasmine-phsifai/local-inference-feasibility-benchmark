@@ -27,11 +27,7 @@ def main() -> None:
     if int(config["effective_threads_per_process"]) != 8:
         raise ValueError("SenseVoice v0.1.9 has a fixed eight-thread CPU backend")
     items = request["workload"]["items"]
-    warmup = next(
-        item
-        for item in items
-        if item["id"] == request["workload"]["warmup_item_id"]
-    )
+    warmup = request["workload"]["warmup_item"]
     project_root = Path(__file__).resolve().parents[1]
     runtime_root = project_root / "data" / "models" / "sensevoice"
     binary = runtime_root / "llama-funasr-sensevoice.exe"

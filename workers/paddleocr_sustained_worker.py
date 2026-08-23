@@ -80,7 +80,7 @@ def main() -> None:
     public_summary = build_public_summary(
         candidate_id=request["candidate_id"],
         task="ocr",
-        runtime_name="paddleocr_ppocrv6_tiny",
+        runtime_name=f"paddleocr_ppocrv6_{request['config'].get('model_tier', 'tiny')}",
         runtime_version=importlib.metadata.version("paddleocr"),
         workload_class=request["workload"]["workload_class"],
         records=records,
@@ -107,6 +107,9 @@ def _worker_process(
     config = request["config"]
     process_count = int(config["processes"])
     threads = int(config["threads_per_process"])
+    model_tier = config.get("model_tier", "tiny")
+    if model_tier not in {"tiny", "medium"}:
+        raise ValueError("unsupported PP-OCRv6 model tier")
     os.environ["OMP_NUM_THREADS"] = str(threads)
     os.environ["MKL_NUM_THREADS"] = str(threads)
     try:
@@ -115,8 +118,8 @@ def _worker_process(
         loaded_at = time.perf_counter()
         engine = PaddleOCR(
             device="cpu",
-            text_detection_model_name="PP-OCRv6_tiny_det",
-            text_recognition_model_name="PP-OCRv6_tiny_rec",
+            text_detection_model_name=f"PP-OCRv6_{model_tier}_det",
+            text_recognition_model_name=f"PP-OCRv6_{model_tier}_rec",
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -125,11 +128,7 @@ def _worker_process(
         )
         load_seconds = time.perf_counter() - loaded_at
         items = request["workload"]["items"]
-        warmup = next(
-            item
-            for item in items
-            if item["id"] == request["workload"]["warmup_item_id"]
-        )
+        warmup = request["workload"]["warmup_item"]
         warmup_record = _recognize(engine, warmup, capture_prediction=False)
         ready_queue.put(
             {
