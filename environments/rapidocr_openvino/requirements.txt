@@ -1,0 +1,7 @@
+rapidocr==3.9.2
+onnxruntime==1.29.0
+openvino==2026.3.0
+opencv-python==4.13.0.92
+psutil==7.2.2
+numpy==2.2.6
+pillow==12.3.0

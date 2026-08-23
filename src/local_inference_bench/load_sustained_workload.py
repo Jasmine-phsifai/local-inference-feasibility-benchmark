@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 _SAMPLE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_OUTPUT_MARKER = re.compile(
+    r"^<!-- meta:(?:page number=[1-9][0-9]*|frame id=[a-z0-9][a-z0-9_-]{0,63}) -->$"
+)
 _WORKLOAD_CLASSES = {
     "generated_control",
     "generated_quality_control",
@@ -118,6 +121,14 @@ def _load_item(
         if type(expected_text) is not bool:
             raise ValueError("OCR workload expected_text must be boolean")
         item["expected_text"] = expected_text
+        output_marker = raw_item.get("output_marker")
+        if output_marker is not None:
+            if (
+                type(output_marker) is not str
+                or _OUTPUT_MARKER.fullmatch(output_marker) is None
+            ):
+                raise ValueError("OCR workload output_marker is invalid")
+            item["output_marker"] = output_marker
     return item
 
 
@@ -133,6 +144,7 @@ def _fingerprint_items(items: list[dict], task: str) -> str:
             digest.update(str(item["expected_speech"]).encode("ascii"))
         else:
             digest.update(str(item["expected_text"]).encode("ascii"))
+            digest.update(item.get("output_marker", "").encode("ascii"))
         with path.open("rb") as handle:
             while chunk := handle.read(1024 * 1024):
                 digest.update(chunk)

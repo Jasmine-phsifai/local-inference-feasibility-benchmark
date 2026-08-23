@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from local_inference_bench.load_sustained_workload import load_sustained_workload
 
 
@@ -109,3 +111,62 @@ def test_generated_quality_control_is_an_allowed_public_class(tmp_path):
     workload = load_sustained_workload(manifest_path, expected_task="ocr")
 
     assert workload["workload_class"] == "generated_quality_control"
+
+
+def test_ocr_output_marker_is_private_and_binds_fingerprint(tmp_path):
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png")
+    manifest_path = tmp_path / "manifest.json"
+
+    def load(marker: str):
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "task": "ocr",
+                    "workload_class": "generated_quality_control",
+                    "items": [
+                        {
+                            "id": "image_001",
+                            "path": image.name,
+                            "output_marker": marker,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return load_sustained_workload(manifest_path, expected_task="ocr")
+
+    first = load("<!-- meta:page number=7 -->")
+    second = load("<!-- meta:page number=8 -->")
+
+    assert first["items"][0]["output_marker"] == "<!-- meta:page number=7 -->"
+    assert "output_marker" not in json.dumps(first["public_summary"])
+    assert first["fingerprint"] != second["fingerprint"]
+
+
+def test_ocr_output_marker_rejects_unbounded_content(tmp_path):
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task": "ocr",
+                "workload_class": "generated_quality_control",
+                "items": [
+                    {
+                        "id": "image_001",
+                        "path": image.name,
+                        "output_marker": "<!-- meta:page number=7 --> private text",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="output_marker"):
+        load_sustained_workload(manifest_path, expected_task="ocr")

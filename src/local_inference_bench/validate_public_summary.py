@@ -24,11 +24,15 @@ _ALLOWED_STRING_KEYS = {
     "backend",
     "candidate_id",
     "compute_type",
+    "device",
+    "device_name",
+    "execution_devices",
     "failure_kind",
     "load_semantics",
     "mode",
     "model_revision",
     "phase",
+    "prompt_version",
     "protocol",
     "runtime_name",
     "runtime_version",
@@ -49,6 +53,78 @@ def validate_public_summary(summary: object) -> dict:
     normalized = _validate_value(summary, key=None)
     assert isinstance(normalized, dict)
     return normalized
+
+
+def validate_sustained_public_summary(
+    summary: object,
+    *,
+    candidate_id: str,
+    task: str,
+    workload_class: str,
+    target_wall_seconds: float,
+) -> dict:
+    """Validate benchmark evidence and bind it to the runner-owned request."""
+
+    normalized = validate_public_summary(summary)
+    expected_identity = {
+        "candidate_id": candidate_id,
+        "task": task,
+        "workload_class": workload_class,
+    }
+    for key, expected in expected_identity.items():
+        if normalized.get(key) != expected:
+            raise ValueError(f"sustained public_summary identity mismatch: {key}")
+    for key in ("runtime_name", "runtime_version", "load_semantics"):
+        if not isinstance(normalized.get(key), str) or not normalized[key]:
+            raise ValueError(f"sustained public_summary is missing {key}")
+
+    counts = normalized.get("counts")
+    if not isinstance(counts, Mapping):
+        raise ValueError("sustained public_summary is missing counts")
+    completed = _nonnegative_int(counts, "completed")
+    failed = _nonnegative_int(counts, "failed")
+    attempted = _nonnegative_int(counts, "attempted")
+    if attempted == 0 or completed + failed != attempted:
+        raise ValueError("sustained public_summary count invariant failed")
+
+    throughput = normalized.get("throughput")
+    if not isinstance(throughput, Mapping):
+        raise ValueError("sustained public_summary is missing throughput")
+    value = throughput.get("value")
+    if type(value) not in {int, float} or value < 0:
+        raise ValueError("sustained public_summary throughput is invalid")
+    expected_unit = {
+        "asr": "audio_hours_per_wall_hour",
+        "ocr": "images_per_hour",
+    }[task]
+    if throughput.get("unit") != expected_unit:
+        raise ValueError("sustained public_summary throughput unit mismatch")
+
+    timing = normalized.get("timing")
+    if not isinstance(timing, Mapping):
+        raise ValueError("sustained public_summary is missing timing")
+    steady_wall_seconds = timing.get("steady_wall_seconds")
+    if type(steady_wall_seconds) not in {int, float} or steady_wall_seconds <= 0:
+        raise ValueError("sustained public_summary steady timing is invalid")
+    reported_target = timing.get("target_wall_seconds")
+    if (
+        type(reported_target) not in {int, float}
+        or not math.isclose(
+            float(reported_target),
+            float(target_wall_seconds),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+    ):
+        raise ValueError("sustained public_summary target timing mismatch")
+    return normalized
+
+
+def _nonnegative_int(mapping: Mapping, key: str) -> int:
+    value = mapping.get(key)
+    if type(value) is not int or value < 0:
+        raise ValueError(f"sustained public_summary count is invalid: {key}")
+    return value
 
 
 def _validate_value(value: object, *, key: str | None) -> object:

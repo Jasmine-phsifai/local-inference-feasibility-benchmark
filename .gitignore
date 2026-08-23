@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 data/models/
 data/tools/
+data/downloads/
 data/inputs/generated/
 data/inputs/public/
 data/inputs/local/

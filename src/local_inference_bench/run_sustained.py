@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import time
@@ -23,7 +24,7 @@ from .project_paths import (
 )
 from .resource_monitor import ProcessTreeMonitor
 from .terminate_process_tree import terminate_process_tree
-from .validate_public_summary import validate_public_summary
+from .validate_public_summary import validate_sustained_public_summary
 from .windows_host_monitor import WindowsHostMonitor
 
 
@@ -54,31 +55,50 @@ def run_sustained_candidate(
     python = _python_for(candidate["environment"])
     if not python.is_file():
         raise FileNotFoundError(f"candidate Python is missing for {candidate_id}")
-    selected_indices = (
-        tuple(range(len(candidate["configs"])))
-        if config_indices is None
-        else config_indices
-    )
-    if any(index < 0 or index >= len(candidate["configs"]) for index in selected_indices):
-        raise ValueError("config index is out of range")
+    if candidate.get("verify_script"):
+        _verify_candidate_environment(
+            python,
+            PROJECT_ROOT / candidate["verify_script"],
+        )
+    selected_indices = _select_config_indices(candidate, phase, config_indices)
     successful_keys = {
         event["attempt_key"]
         for event in read_events(SUSTAINED_EVENTS_PATH)
         if event.get("event") == "sustained_attempt_succeeded"
     }
-    code_fingerprint = fingerprint_files(
-        [
-            Path(__file__),
-            PROJECT_ROOT / candidate["worker"],
-            PROJECT_ROOT / "workers" / "sustained_worker_metrics.py",
-            PROJECT_ROOT / "src" / "local_inference_bench" / "resource_monitor.py",
-            PROJECT_ROOT / "src" / "local_inference_bench" / "windows_host_monitor.py",
-        ]
+    environment_identity_script = (
+        PROJECT_ROOT / "scripts" / "capture_environment_identity.py"
+    )
+    fingerprint_paths = [
+        Path(__file__),
+        PROJECT_ROOT / candidate["worker"],
+        PROJECT_ROOT / candidate["environment_manifest"],
+        environment_identity_script,
+        PROJECT_ROOT / "workers" / "sustained_worker_metrics.py",
+        PROJECT_ROOT / "src" / "local_inference_bench" / "load_sustained_workload.py",
+        PROJECT_ROOT / "src" / "local_inference_bench" / "resource_monitor.py",
+        PROJECT_ROOT / "src" / "local_inference_bench" / "validate_public_summary.py",
+        PROJECT_ROOT / "src" / "local_inference_bench" / "windows_host_monitor.py",
+    ]
+    if candidate.get("verify_script"):
+        fingerprint_paths.append(PROJECT_ROOT / candidate["verify_script"])
+    fingerprint_paths.extend(
+        PROJECT_ROOT / relative_path
+        for relative_path in candidate.get("fingerprint_files", [])
+    )
+    fingerprint_paths.extend(
+        PROJECT_ROOT / relative_path
+        for relative_path in candidate.get("artifact_files", [])
+    )
+    code_fingerprint = fingerprint_files(fingerprint_paths)
+    environment_fingerprint = _capture_environment_fingerprint(
+        python,
+        environment_identity_script,
     )
     stable_hardware = _stable_hardware(load_json(HARDWARE_PATH))
-    for config_index in selected_indices:
-        config = candidate["configs"][config_index]
-        for trial_index in range(trial_count):
+    for trial_index in range(trial_count):
+        for config_index in _ordered_config_indices(selected_indices, trial_index):
+            config = candidate["configs"][config_index]
             attempt_key = fingerprint_json(
                 {
                     "protocol": registry["protocol"],
@@ -87,6 +107,10 @@ def run_sustained_candidate(
                     "workload": workload["fingerprint"],
                     "hardware": stable_hardware,
                     "code": code_fingerprint,
+                    "environment": {
+                        "name": candidate["environment"],
+                        "fingerprint": environment_fingerprint,
+                    },
                     "phase": phase,
                     "target_wall_seconds": target_wall_seconds,
                     "trial_index": trial_index,
@@ -106,11 +130,94 @@ def run_sustained_candidate(
                 trial_index=trial_index,
                 attempt_key=attempt_key,
                 code_fingerprint=code_fingerprint,
+                environment_fingerprint=environment_fingerprint,
             )
 
 
 def _python_for(environment: str) -> Path:
     return Path("D:/Anaconda/envs") / environment / "python.exe"
+
+
+def _capture_environment_fingerprint(python: Path, script: Path) -> str:
+    try:
+        completed = subprocess.run(
+            [str(python), str(script)],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("candidate environment identity capture timed out") from error
+    if completed.returncode != 0:
+        raise RuntimeError("candidate environment identity capture failed")
+    try:
+        identity = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("candidate environment identity was invalid") from error
+    return fingerprint_json(identity)
+
+
+def _verify_candidate_environment(python: Path, script: Path) -> None:
+    environment = os.environ.copy()
+    environment["CI"] = "true"
+    environment["HF_HUB_OFFLINE"] = "1"
+    environment["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        completed = subprocess.run(
+            [str(python), str(script)],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("candidate environment verification timed out") from error
+    if completed.returncode != 0:
+        raise RuntimeError("candidate environment verification failed")
+
+
+def _ordered_config_indices(
+    selected_indices: tuple[int, ...],
+    trial_index: int,
+) -> tuple[int, ...]:
+    """Alternate A/B order across trials to reduce thermal and cache bias."""
+
+    return selected_indices if trial_index % 2 == 0 else tuple(reversed(selected_indices))
+
+
+def _select_config_indices(
+    candidate: dict,
+    phase: str,
+    requested_indices: tuple[int, ...] | None,
+) -> tuple[int, ...]:
+    configs = candidate["configs"]
+    if requested_indices is not None and any(
+        index < 0 or index >= len(configs) for index in requested_indices
+    ):
+        raise ValueError("config index is out of range")
+    indices = (
+        tuple(range(len(configs)))
+        if requested_indices is None
+        else requested_indices
+    )
+    selected = tuple(
+        index
+        for index in indices
+        if phase in configs[index].get("phases", _PHASES)
+    )
+    if requested_indices is not None and selected != requested_indices:
+        raise ValueError("requested config does not support this phase")
+    if not selected:
+        raise ValueError("candidate has no config for this phase")
+    return selected
 
 
 def _stable_hardware(hardware: dict) -> dict:
@@ -145,6 +252,7 @@ def _run_attempt(
     trial_index: int,
     attempt_key: str,
     code_fingerprint: str,
+    environment_fingerprint: str,
 ) -> None:
     attempt_id = str(uuid.uuid4())
     artifact_dir = SUSTAINED_ARTIFACTS_PATH / candidate["id"] / attempt_id
@@ -175,9 +283,11 @@ def _run_attempt(
     common = {
         "protocol": registry["protocol"],
         "candidate_id": candidate["id"],
+        "task": candidate["task"],
         "attempt_id": attempt_id,
         "attempt_key": attempt_key,
         "code_fingerprint": code_fingerprint,
+        "environment_fingerprint": environment_fingerprint,
         "config": config,
         "config_index": config_index,
         "phase": phase,
@@ -194,6 +304,7 @@ def _run_attempt(
         },
     )
     environment = os.environ.copy()
+    environment["CI"] = "true"
     environment["HF_HUB_DISABLE_XET"] = "1"
     environment["TOKENIZERS_PARALLELISM"] = "false"
     command = [
@@ -244,6 +355,8 @@ def _run_attempt(
     _record_attempt_outcome(
         common=common,
         response_path=response_path,
+        private_records_path=private_records_path,
+        workload_fingerprint=workload["fingerprint"],
         exit_code=exit_code,
         failure_kind=failure_kind,
         wall_seconds=wall_seconds,
@@ -280,6 +393,8 @@ def _record_attempt_outcome(
     *,
     common: dict,
     response_path: Path,
+    private_records_path: Path,
+    workload_fingerprint: str,
     exit_code: int,
     failure_kind: str | None,
     wall_seconds: float,
@@ -291,11 +406,26 @@ def _record_attempt_outcome(
     if exit_code == 0 and response_path.is_file():
         try:
             response = json.loads(response_path.read_text(encoding="utf-8"))
-            public_summary = validate_public_summary(response["public_summary"])
+            public_summary = validate_sustained_public_summary(
+                response["public_summary"],
+                candidate_id=common["candidate_id"],
+                task=common["task"],
+                workload_class=common["workload"]["workload_class"],
+                target_wall_seconds=common["target_wall_seconds"],
+            )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             failure_kind = "invalid_response"
     elif exit_code == 0:
         failure_kind = "missing_response"
+    if public_summary is not None and failure_kind is None:
+        try:
+            _write_records_provenance(
+                private_records_path,
+                common,
+                workload_fingerprint=workload_fingerprint,
+            )
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            failure_kind = "invalid_private_records"
     if public_summary is not None and failure_kind is None:
         append_event(
             SUSTAINED_EVENTS_PATH,
@@ -323,3 +453,44 @@ def _record_attempt_outcome(
             "host_telemetry": host_telemetry,
         },
     )
+
+
+def _write_records_provenance(
+    private_records_path: Path,
+    common: dict,
+    *,
+    workload_fingerprint: str,
+) -> None:
+    if not private_records_path.is_file():
+        raise FileNotFoundError("worker private records are missing")
+    provenance = {
+        "schema_version": 1,
+        "protocol": common["protocol"],
+        "status": "succeeded",
+        "attempt_id": common["attempt_id"],
+        "attempt_key": common["attempt_key"],
+        "candidate_id": common["candidate_id"],
+        "task": common["task"],
+        "config": common["config"],
+        "config_index": common["config_index"],
+        "phase": common["phase"],
+        "trial_index": common["trial_index"],
+        "workload_class": common["workload"]["workload_class"],
+        "workload_fingerprint": workload_fingerprint,
+        "code_fingerprint": common["code_fingerprint"],
+        "environment_fingerprint": common["environment_fingerprint"],
+        "records_sha256": _sha256(private_records_path),
+    }
+    private_records_path.with_name("records-provenance.json").write_text(
+        json.dumps(provenance, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

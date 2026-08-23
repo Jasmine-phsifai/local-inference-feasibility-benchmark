@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--request", required=True)
     args = parser.parse_args()
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    backend = _backend_name(request["config"])
     process_count = int(request["config"]["processes"])
     context = multiprocessing.get_context("spawn")
     start_event = context.Event()
@@ -87,7 +88,10 @@ def main() -> None:
         candidate_id=request["candidate_id"],
         task="ocr",
         runtime_name="rapidocr",
-        runtime_version=importlib.metadata.version("rapidocr"),
+        runtime_version=(
+            f"rapidocr-{importlib.metadata.version('rapidocr')}+"
+            f"{backend}-{importlib.metadata.version(backend)}"
+        ),
         workload_class=request["workload"]["workload_class"],
         records=records,
         load_seconds=[item["load_seconds"] for item in ready],
@@ -100,6 +104,24 @@ def main() -> None:
     public_summary["preprocessing"] = {
         "classifier_enabled": bool(config.get("use_cls", True)),
         "max_side_len": int(config.get("max_side_len", 2000)),
+        "use_preprocess_img": True,
+        "use_vertical_padding": True,
+        "det_limit_side_len": 736,
+        "det_use_dilation": True,
+        "rec_batch_num": 6,
+        "cls_batch_num": 6,
+    }
+    public_summary["postprocessing"] = {
+        "line_score_threshold": 0.5,
+        "det_threshold": 0.3,
+        "det_box_threshold": 0.5,
+        "det_unclip_ratio": 1.6,
+        "cls_threshold": 0.9,
+    }
+    public_summary["model"] = {
+        "backend": backend,
+        "device": "CPU",
+        "model_revision": "rapidocr-v3.9.2-ppocrv6-small",
     }
     Path(request["response_path"]).write_text(
         json.dumps({"public_summary": public_summary}, indent=2),
@@ -121,10 +143,16 @@ def _worker_process(
     os.environ["OMP_NUM_THREADS"] = str(threads)
     os.environ["MKL_NUM_THREADS"] = str(threads)
     try:
-        from rapidocr import RapidOCR
+        from rapidocr import EngineType, RapidOCR
 
         loaded_at = time.perf_counter()
-        engine = RapidOCR(params=_engine_params(config, threads))
+        engine = RapidOCR(
+            params=_engine_params(
+                config,
+                threads,
+                engine_type=EngineType(_backend_name(config)),
+            )
+        )
         load_seconds = time.perf_counter() - loaded_at
         items = request["workload"]["items"]
         warmup = request["workload"]["warmup_item"]
@@ -171,12 +199,36 @@ def _worker_process(
     result_queue.put({"kind": "done"})
 
 
-def _engine_params(config: dict, threads: int) -> dict:
+def _backend_name(config: dict) -> str:
+    backend = str(config.get("backend", "onnxruntime")).casefold()
+    if backend not in {"onnxruntime", "openvino"}:
+        raise ValueError(f"unsupported RapidOCR backend: {backend}")
+    return backend
+
+
+def _engine_params(config: dict, threads: int, *, engine_type: object) -> dict:
+    backend = _backend_name(config)
     params = {
         "Global.log_level": "critical",
-        "EngineConfig.onnxruntime.intra_op_num_threads": threads,
-        "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        "Det.engine_type": engine_type,
+        "Cls.engine_type": engine_type,
+        "Rec.engine_type": engine_type,
     }
+    if backend == "onnxruntime":
+        params.update(
+            {
+                "EngineConfig.onnxruntime.intra_op_num_threads": threads,
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            }
+        )
+    else:
+        params.update(
+            {
+                "EngineConfig.openvino.inference_num_threads": threads,
+                "EngineConfig.openvino.performance_hint": "LATENCY",
+                "EngineConfig.openvino.num_streams": 1,
+            }
+        )
     if "use_cls" in config:
         params["Global.use_cls"] = bool(config["use_cls"])
     if "max_side_len" in config:

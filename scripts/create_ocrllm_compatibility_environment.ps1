@@ -41,23 +41,7 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw 'OCRLLM compatibility environment dependency check failed.'
 }
-& $environmentPython -c @'
-import importlib.metadata
-import json
-from pathlib import Path
-
-import ocrllm
-
-distribution = importlib.metadata.distribution("ocrllm")
-direct_url_text = distribution.read_text("direct_url.json")
-direct_url = json.loads(direct_url_text) if direct_url_text else {}
-if direct_url.get("dir_info", {}).get("editable"):
-    raise SystemExit("OCRLLM remained editable")
-module_path = Path(ocrllm.__file__).resolve()
-if "site-packages" not in {part.casefold() for part in module_path.parts}:
-    raise SystemExit(f"OCRLLM did not install into site-packages: {module_path}")
-print(distribution.version)
-'@
+& $environmentPython (Join-Path $PSScriptRoot 'verify_ocrllm_compatibility_environment.py')
 if ($LASTEXITCODE -ne 0) {
     throw 'OCRLLM independent-install verification failed.'
 }

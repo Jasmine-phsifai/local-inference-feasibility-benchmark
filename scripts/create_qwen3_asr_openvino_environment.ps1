@@ -25,16 +25,8 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw 'Qwen3-ASR OpenVINO environment dependency check failed.'
 }
-& $targetPython -c @'
-import openvino
-import optimum.intel
-import qwen_asr
-import transformers
-
-assert openvino.__version__.startswith("2026.3")
-assert transformers.__version__ == "4.57.6"
-print(openvino.__version__, transformers.__version__)
-'@
+$environmentVerifier = Join-Path $projectRoot 'scripts\verify_qwen3_asr_openvino_environment.py'
+& $targetPython $environmentVerifier
 if ($LASTEXITCODE -ne 0) {
     throw 'Qwen3-ASR OpenVINO import verification failed.'
 }

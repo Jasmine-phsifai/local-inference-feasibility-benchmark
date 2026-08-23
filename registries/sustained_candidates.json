@@ -9,6 +9,7 @@
       "id": "sensevoice_small_gguf_cpu",
       "task": "asr",
       "environment": "local-bench-control",
+      "environment_manifest": "environments/control/environment.yml",
       "worker": "workers/sensevoice_sustained_worker.py",
       "configs": [
         {"processes": 1, "effective_threads_per_process": 8},
@@ -24,6 +25,7 @@
       "id": "faster_whisper_cpu",
       "task": "asr",
       "environment": "local-bench-faster-whisper",
+      "environment_manifest": "environments/faster_whisper_cpu/requirements.txt",
       "worker": "workers/faster_whisper_sustained_worker.py",
       "configs": [
         {"processes": 1, "model_workers": 1, "threads_per_worker": 16},
@@ -50,7 +52,9 @@
     {
       "id": "rapidocr_cpu",
       "task": "ocr",
-      "environment": "local-bench-rapidocr",
+      "environment": "local-bench-rapidocr-openvino",
+      "environment_manifest": "environments/rapidocr_openvino/requirements.txt",
+      "verify_script": "scripts/verify_rapidocr_openvino_environment.py",
       "worker": "workers/rapidocr_sustained_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 1},
@@ -67,13 +71,16 @@
         {"processes": 8, "threads_per_process": 3},
         {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 2000},
         {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1536},
-        {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1280}
+        {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1280},
+        {"processes": 8, "threads_per_process": 2, "backend": "onnxruntime", "use_cls": true, "max_side_len": 2000},
+        {"processes": 8, "threads_per_process": 2, "backend": "openvino", "use_cls": true, "max_side_len": 2000}
       ]
     },
     {
       "id": "ppocrv6_tiny_cpu",
       "task": "ocr",
       "environment": "local-bench-paddleocr",
+      "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
       "worker": "workers/paddleocr_sustained_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 4},
@@ -94,6 +101,7 @@
       "id": "ppocrv6_medium_cpu",
       "task": "ocr",
       "environment": "local-bench-paddleocr",
+      "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
       "worker": "workers/paddleocr_sustained_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 4, "model_tier": "medium"},
@@ -107,6 +115,7 @@
       "id": "paddleocr_vl_1_6_cpu",
       "task": "ocr",
       "environment": "local-bench-paddleocr",
+      "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
       "worker": "workers/paddleocr_vl_structured_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
@@ -118,6 +127,7 @@
       "id": "hunyuanocr_1_5_gguf_cpu",
       "task": "ocr",
       "environment": "local-bench-control",
+      "environment_manifest": "environments/control/environment.yml",
       "worker": "workers/hunyuanocr_1_5_server_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 16, "max_new_tokens": 256, "mode": "doc_parse"},
@@ -127,13 +137,65 @@
       ]
     },
     {
+      "id": "hunyuanocr_1_5_native_cpu",
+      "task": "ocr",
+      "environment": "local-bench-hunyuanocr-native",
+      "environment_manifest": "environments/hunyuanocr_native/requirements.txt",
+      "verify_script": "scripts/verify_hunyuanocr_native_environment.py",
+      "fingerprint_files": [
+        "workers/build_source_faithful_ocr_prompt.py"
+      ],
+      "worker": "workers/hunyuanocr_1_5_transformers_cpu_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 256, "max_side_len": 960, "max_pixels": 522240, "max_vision_patches": 2040, "max_items": 1, "mode": "doc_parse", "phases": ["compatibility"], "require_all_success": true},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512, "max_side_len": 1920, "max_pixels": 2088960, "max_vision_patches": 8160, "max_items": 3, "mode": "doc_parse", "phases": ["quality"]},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512, "max_side_len": 1920, "max_pixels": 2088960, "max_vision_patches": 8160, "max_items": 3, "mode": "source_faithful", "phases": ["quality"]}
+      ]
+    },
+    {
       "id": "qwen3_asr_0_6b_cpu",
       "task": "asr",
       "environment": "local-bench-qwen3-asr",
+      "environment_manifest": "environments/qwen3_asr_cpu/requirements.txt",
       "worker": "workers/qwen3_asr_sustained_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
         {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512}
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_openvino",
+      "task": "asr",
+      "environment": "local-bench-qwen3-asr-openvino",
+      "environment_manifest": "environments/qwen3_asr_openvino/requirements.txt",
+      "worker": "workers/qwen3_asr_openvino_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "device": "CPU", "threads_per_process": 16, "max_new_tokens": 512},
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 512},
+        {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 512},
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 4096},
+        {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 4096}
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_hf_openvino",
+      "task": "asr",
+      "environment": "local-bench-qwen3-asr-hf-openvino",
+      "environment_manifest": "environments/qwen3_asr_hf_openvino/requirements.txt",
+      "verify_script": "scripts/verify_qwen3_asr_hf_openvino_environment.py",
+      "fingerprint_files": [
+        "scripts/export_qwen3_asr_hf_openvino.ps1",
+        "workers/qwen3_asr_hf_openvino_export_manifest.py"
+      ],
+      "artifact_files": [
+        "data/models/qwen3-asr-0.6b-hf-openvino-with-past/export-complete.json"
+      ],
+      "worker": "workers/qwen3_asr_hf_openvino_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 512},
+        {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 512},
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 4096},
+        {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 4096}
       ]
     }
   ]
