@@ -64,7 +64,10 @@
         {"processes": 8, "threads_per_process": 1},
         {"processes": 6, "threads_per_process": 3},
         {"processes": 8, "threads_per_process": 2},
-        {"processes": 8, "threads_per_process": 3}
+        {"processes": 8, "threads_per_process": 3},
+        {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 2000},
+        {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1536},
+        {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1280}
       ]
     },
     {
@@ -107,7 +110,20 @@
       "worker": "workers/paddleocr_vl_structured_worker.py",
       "configs": [
         {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
-        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512}
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 4096}
+      ]
+    },
+    {
+      "id": "hunyuanocr_1_5_gguf_cpu",
+      "task": "ocr",
+      "environment": "local-bench-control",
+      "worker": "workers/hunyuanocr_1_5_server_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 16, "max_new_tokens": 256, "mode": "doc_parse"},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 256, "mode": "doc_parse"},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 4096, "mode": "doc_parse"},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 4096, "mode": "structured_parse"}
       ]
     },
     {

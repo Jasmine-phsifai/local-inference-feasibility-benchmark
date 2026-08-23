@@ -93,6 +93,7 @@ class ProcessTreeMonitor:
             if len(self.samples) >= 2
             else 0.0
         )
+        midrun_rss = _midrun_rss_stability(self.samples)
         return {
             "sample_count": len(self.samples),
             "sampled_seconds": duration,
@@ -102,6 +103,7 @@ class ProcessTreeMonitor:
             "rss_growth_bytes_per_hour": (
                 (rss[-1] - rss[0]) / duration * 3600 if duration > 0 else 0.0
             ),
+            **midrun_rss,
             "peak_cpu_percent_sum": peak_cpu,
             "peak_cpu_percent_of_host": peak_cpu / logical_cpus,
             "mean_cpu_percent_of_host": statistics.fmean(process_cpu) if process_cpu else 0.0,
@@ -115,6 +117,56 @@ class ProcessTreeMonitor:
             "peak_threads": max((s["threads"] for s in self.samples), default=0),
             "peak_processes": max((s["processes"] for s in self.samples), default=0),
         }
+
+
+def _midrun_rss_stability(samples: list[dict]) -> dict:
+    """Compare middle-run RSS windows without startup and teardown bias."""
+    empty = {
+        "midrun_rss_sample_count": 0,
+        "midrun_rss_first_median_bytes": 0.0,
+        "midrun_rss_last_median_bytes": 0.0,
+        "midrun_rss_last_to_first_ratio": 0.0,
+        "midrun_rss_growth_bytes_per_hour": 0.0,
+    }
+    if len(samples) < 10:
+        return empty
+    started = float(samples[0]["time_monotonic"])
+    ended = float(samples[-1]["time_monotonic"])
+    duration = ended - started
+    if duration <= 0:
+        return empty
+    first = [
+        float(sample["rss_bytes"])
+        for sample in samples
+        if started + 0.20 * duration
+        <= float(sample["time_monotonic"])
+        <= started + 0.35 * duration
+    ]
+    last = [
+        float(sample["rss_bytes"])
+        for sample in samples
+        if started + 0.65 * duration
+        <= float(sample["time_monotonic"])
+        <= started + 0.80 * duration
+    ]
+    if not first or not last:
+        return empty
+    first_median = statistics.median(first)
+    last_median = statistics.median(last)
+    midpoint_seconds = 0.45 * duration
+    return {
+        "midrun_rss_sample_count": len(first) + len(last),
+        "midrun_rss_first_median_bytes": first_median,
+        "midrun_rss_last_median_bytes": last_median,
+        "midrun_rss_last_to_first_ratio": (
+            last_median / first_median if first_median > 0 else 0.0
+        ),
+        "midrun_rss_growth_bytes_per_hour": (
+            (last_median - first_median) / midpoint_seconds * 3600
+            if midpoint_seconds > 0
+            else 0.0
+        ),
+    }
 
 
 def _percentile(values: list[float], quantile: float) -> float:

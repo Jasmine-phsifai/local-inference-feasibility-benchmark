@@ -155,7 +155,7 @@ class WindowsHostMonitor:
             self.stop_reason = "committed_memory_at_or_above_95_percent"
 
     def summary(self) -> dict:
-        if self.start_error is not None:
+        if self.start_error is not None and not self.samples:
             return {
                 "status": "unavailable",
                 "sample_count": 0,
@@ -171,8 +171,13 @@ class WindowsHostMonitor:
         frequency = [sample["cpu_actual_frequency_mhz"] for sample in self.samples]
         power = [sample["rapl_package_power_watts"] for sample in self.samples]
         return {
-            "status": "stopped_by_guard" if self.stop_reason else "observed",
+            "status": (
+                "stopped_by_guard"
+                if self.stop_reason
+                else "partial" if self.start_error is not None else "observed"
+            ),
             "sample_count": len(self.samples),
+            "monitor_partial": self.start_error is not None,
             "package_temperature_available": False,
             "mean_cpu_utility_percent": statistics.fmean(cpu_utility),
             "p95_cpu_utility_percent": _percentile(cpu_utility, 0.95),

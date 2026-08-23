@@ -1,0 +1,4 @@
+Pillow==12.3.0
+rapidocr==3.9.2
+onnxruntime==1.23.2
+requests==2.32.5

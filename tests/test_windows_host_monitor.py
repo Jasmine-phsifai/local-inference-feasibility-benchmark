@@ -33,6 +33,19 @@ def test_summary_marks_package_temperature_unavailable(tmp_path):
     assert summary["mean_cpu_utility_percent"] == 85.0
 
 
+def test_summary_keeps_samples_if_counter_process_later_fails(tmp_path):
+    monitor = WindowsHostMonitor(tmp_path / "host.jsonl")
+    monitor.samples = [_sample(), _sample(cpu_utility_percent=90.0)]
+    monitor.start_error = "counter_process_exit"
+
+    summary = monitor.summary()
+
+    assert summary["status"] == "partial"
+    assert summary["monitor_partial"] is True
+    assert summary["sample_count"] == 2
+    assert summary["mean_cpu_utility_percent"] == 85.0
+
+
 def test_two_passive_limit_samples_trigger_stop(tmp_path):
     monitor = WindowsHostMonitor(tmp_path / "host.jsonl")
     sample = _sample(thermal_passive_limit_percent=99.0)

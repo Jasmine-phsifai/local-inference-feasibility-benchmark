@@ -11,7 +11,13 @@ import queue
 import time
 from pathlib import Path
 
-from sustained_worker_metrics import build_public_summary, write_private_records
+try:
+    from sustained_worker_metrics import build_public_summary, write_private_records
+except ModuleNotFoundError:
+    from workers.sustained_worker_metrics import (
+        build_public_summary,
+        write_private_records,
+    )
 
 
 def main() -> None:
@@ -90,6 +96,11 @@ def main() -> None:
         target_wall_seconds=float(request["target_wall_seconds"]),
         load_semantics="resident_model",
     )
+    config = request["config"]
+    public_summary["preprocessing"] = {
+        "classifier_enabled": bool(config.get("use_cls", True)),
+        "max_side_len": int(config.get("max_side_len", 2000)),
+    }
     Path(request["response_path"]).write_text(
         json.dumps({"public_summary": public_summary}, indent=2),
         encoding="utf-8",
@@ -113,13 +124,7 @@ def _worker_process(
         from rapidocr import RapidOCR
 
         loaded_at = time.perf_counter()
-        engine = RapidOCR(
-            params={
-                "Global.log_level": "critical",
-                "EngineConfig.onnxruntime.intra_op_num_threads": threads,
-                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-            }
-        )
+        engine = RapidOCR(params=_engine_params(config, threads))
         load_seconds = time.perf_counter() - loaded_at
         items = request["workload"]["items"]
         warmup = request["workload"]["warmup_item"]
@@ -164,6 +169,19 @@ def _worker_process(
                 break
             item_index += process_count
     result_queue.put({"kind": "done"})
+
+
+def _engine_params(config: dict, threads: int) -> dict:
+    params = {
+        "Global.log_level": "critical",
+        "EngineConfig.onnxruntime.intra_op_num_threads": threads,
+        "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+    }
+    if "use_cls" in config:
+        params["Global.use_cls"] = bool(config["use_cls"])
+    if "max_side_len" in config:
+        params["Global.max_side_len"] = int(config["max_side_len"])
+    return params
 
 
 def _recognize(engine, item: dict, *, capture_prediction: bool) -> dict:

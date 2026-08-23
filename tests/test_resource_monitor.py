@@ -2,7 +2,10 @@ import subprocess
 import sys
 import time
 
-from local_inference_bench.resource_monitor import ProcessTreeMonitor
+from local_inference_bench.resource_monitor import (
+    ProcessTreeMonitor,
+    _midrun_rss_stability,
+)
 
 
 def test_monitor_captures_cpu_and_memory(tmp_path):
@@ -22,3 +25,22 @@ def test_monitor_captures_cpu_and_memory(tmp_path):
     assert summary["p95_cpu_percent_of_host"] > 0
     assert summary["minimum_available_memory_bytes"] > 0
     assert sample_path.read_text(encoding="utf-8").count("\n") >= 2
+
+
+def test_midrun_rss_stability_excludes_startup_and_teardown():
+    samples = [
+        {
+            "time_monotonic": float(index),
+            "rss_bytes": (
+                10 if index == 0 else 100 if index < 65 else 110 if index <= 80 else 1
+            ),
+        }
+        for index in range(101)
+    ]
+
+    stability = _midrun_rss_stability(samples)
+
+    assert stability["midrun_rss_first_median_bytes"] == 100.0
+    assert stability["midrun_rss_last_median_bytes"] == 110.0
+    assert stability["midrun_rss_last_to_first_ratio"] == 1.1
+    assert stability["midrun_rss_growth_bytes_per_hour"] == 800.0
