@@ -34,6 +34,8 @@ PROMPTS = {
 _LATEX_MARKER = re.compile(
     r"(?:\\\(|\\\[|\$\$|\\begin\{|\\frac|\\sum|\\int)"
 )
+_HUNYUAN_BEGIN = "<\uff5chy_begin\u2581of\u2581sentence\uff5c>"
+_HUNYUAN_USER = "<\uff5chy_User\uff5c>"
 
 
 def main() -> None:
@@ -88,12 +90,14 @@ def main() -> None:
         try:
             _wait_until_ready(server, port, timeout_seconds=900.0)
             load_seconds = time.perf_counter() - loaded_at
+            media_marker = str(_get_json(port, "/props")["media_marker"])
             warmup = _recognize(
                 port=port,
                 item=request["workload"]["warmup_item"],
                 prompt=PROMPTS["structured_parse"],
                 max_new_tokens=min(128, max_new_tokens),
                 capture_prediction=False,
+                media_marker=media_marker,
             )
             if not warmup["success"]:
                 raise RuntimeError("HunyuanOCR warmup failed")
@@ -107,6 +111,7 @@ def main() -> None:
                     prompt=PROMPTS[mode],
                     max_new_tokens=max_new_tokens,
                     capture_prediction=bool(request["capture_predictions"]),
+                    media_marker=media_marker,
                 )
                 record["completed_offset_seconds"] = time.perf_counter() - started
                 records.append(record)
@@ -136,7 +141,7 @@ def main() -> None:
         "mode": mode,
         "threads": threads,
         "parallel_slots": 1,
-        "context_tokens": 10240,
+        "sequence_limit_tokens": 10240,
     }
     Path(request["response_path"]).write_text(
         json.dumps({"public_summary": public_summary}, indent=2),
@@ -201,46 +206,24 @@ def _recognize(
     prompt: str,
     max_new_tokens: int,
     capture_prediction: bool,
+    media_marker: str,
 ) -> dict:
     started = time.perf_counter()
     try:
         response = _post_json(
             port,
-            "/v1/chat/completions",
-            {
-                "model": "HYOCR15",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": _image_data_url(Path(item["path"]))
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "max_tokens": max_new_tokens,
-                "temperature": 0,
-                "top_p": 1,
-                "top_k": 0,
-                "min_p": 0,
-                "repeat_penalty": 1.08,
-                "seed": 1,
-                "stream": False,
-                "cache_prompt": False,
-            },
+            "/completion",
+            _raw_completion_payload(
+                image_path=Path(item["path"]),
+                prompt=_raw_hunyuan_prompt(media_marker, prompt),
+                max_new_tokens=max_new_tokens,
+            ),
             timeout_seconds=1200.0,
         )
-        choice = response["choices"][0]
-        text = str(choice["message"]["content"]).strip()
-        finish_reason = str(choice.get("finish_reason", ""))
-        usage = response.get("usage", {})
+        text = str(response["content"]).strip()
+        stop_type = str(response.get("stop_type", ""))
         timings = response.get("timings", {})
-        completion_tokens = int(usage.get("completion_tokens", 0))
+        completion_tokens = int(timings.get("predicted_n", 0))
     except Exception as error:
         return {
             "sample_id": item["id"],
@@ -261,10 +244,10 @@ def _recognize(
         "output_character_count": len(text),
         "completion_tokens": completion_tokens,
         "token_cap_hit": (
-            completion_tokens == max_new_tokens and finish_reason == "length"
+            completion_tokens == max_new_tokens and stop_type == "limit"
         ),
-        "length_finish": finish_reason == "length",
-        "stop_finish": finish_reason == "stop",
+        "length_finish": stop_type == "limit",
+        "stop_finish": stop_type in {"eos", "word"},
         "prompt_seconds": _milliseconds_to_seconds(timings.get("prompt_ms")),
         "generation_seconds": _milliseconds_to_seconds(
             timings.get("predicted_ms")
@@ -283,6 +266,36 @@ def _recognize(
         ]
         record["raw_response"] = response
     return record
+
+
+def _raw_hunyuan_prompt(media_marker: str, prompt: str) -> str:
+    # Equivalent to llama.cpp's pinned LLM_CHAT_TEMPLATE_HUNYUAN_VL branch.
+    return f"{_HUNYUAN_BEGIN}{media_marker}{prompt}{_HUNYUAN_USER}"
+
+
+def _raw_completion_payload(
+    *,
+    image_path: Path,
+    prompt: str,
+    max_new_tokens: int,
+) -> dict:
+    return {
+        "prompt": {
+            "prompt_string": prompt,
+            "multimodal_data": [
+                base64.b64encode(image_path.read_bytes()).decode("ascii")
+            ],
+        },
+        "n_predict": max_new_tokens,
+        "temperature": 0,
+        "top_p": 1,
+        "top_k": 0,
+        "min_p": 0,
+        "repeat_penalty": 1.08,
+        "seed": 1,
+        "stream": False,
+        "cache_prompt": False,
+    }
 
 
 def _generation_summary(records: list[dict], max_new_tokens: int) -> dict:
@@ -325,13 +338,6 @@ def _format_metrics(text: str) -> dict:
         "latex_marker": bool(_LATEX_MARKER.search(text)),
         "complete_html_table": "<table" in folded and "</table>" in folded,
     }
-
-
-def _image_data_url(path: Path) -> str:
-    suffix = path.suffix.casefold()
-    mime = "image/png" if suffix == ".png" else "image/jpeg"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
 
 
 def _reserve_local_port() -> int:
@@ -378,6 +384,14 @@ def _post_json(
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _get_json(port: int, route: str) -> dict:
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{port}{route}",
+        timeout=30.0,
+    ) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
