@@ -27,11 +27,14 @@ def test_non_stress_candidates_do_not_exceed_visible_cpu_budget():
         for config in candidate["configs"]:
             processes = config["processes"]
             if candidate["task"] == "asr":
-                budget = (
-                    processes
-                    * config["model_workers"]
-                    * config["threads_per_worker"]
-                )
+                if "model_workers" in config:
+                    budget = (
+                        processes
+                        * config["model_workers"]
+                        * config["threads_per_worker"]
+                    )
+                else:
+                    budget = processes * config["threads_per_process"]
             else:
                 budget = processes * config["threads_per_process"]
             assert 1 <= budget <= 24, (candidate["id"], config)

@@ -99,6 +99,26 @@
         {"processes": 3, "threads_per_process": 8, "model_tier": "medium"},
         {"processes": 4, "threads_per_process": 4, "model_tier": "medium"}
       ]
+    },
+    {
+      "id": "paddleocr_vl_1_6_cpu",
+      "task": "ocr",
+      "environment": "local-bench-paddleocr",
+      "worker": "workers/paddleocr_vl_structured_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512}
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_cpu",
+      "task": "asr",
+      "environment": "local-bench-qwen3-asr",
+      "worker": "workers/qwen3_asr_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512}
+      ]
     }
   ]
 }
