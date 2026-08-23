@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "protocol": "sustained-process-v1",
+  "resource_sample_interval_seconds": 0.5,
+  "host_sample_interval_seconds": 2.0,
+  "timeout_overhead_seconds": 1800,
+  "candidates": [
+    {
+      "id": "sensevoice_small_gguf_cpu",
+      "task": "asr",
+      "environment": "local-bench-control",
+      "worker": "workers/sensevoice_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "effective_threads_per_process": 8},
+        {"processes": 2, "effective_threads_per_process": 8},
+        {"processes": 3, "effective_threads_per_process": 8},
+        {"processes": 4, "effective_threads_per_process": 8},
+        {"processes": 5, "effective_threads_per_process": 8},
+        {"processes": 6, "effective_threads_per_process": 8},
+        {"processes": 8, "effective_threads_per_process": 8}
+      ]
+    },
+    {
+      "id": "faster_whisper_cpu",
+      "task": "asr",
+      "environment": "local-bench-faster-whisper",
+      "worker": "workers/faster_whisper_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "model_workers": 1, "threads_per_worker": 16},
+        {"processes": 1, "model_workers": 2, "threads_per_worker": 8},
+        {"processes": 1, "model_workers": 3, "threads_per_worker": 6},
+        {"processes": 1, "model_workers": 4, "threads_per_worker": 4},
+        {"processes": 1, "model_workers": 6, "threads_per_worker": 4},
+        {"processes": 1, "model_workers": 8, "threads_per_worker": 2},
+        {"processes": 2, "model_workers": 1, "threads_per_worker": 8},
+        {"processes": 3, "model_workers": 1, "threads_per_worker": 6},
+        {"processes": 4, "model_workers": 1, "threads_per_worker": 4},
+        {"processes": 6, "model_workers": 1, "threads_per_worker": 2}
+      ]
+    },
+    {
+      "id": "rapidocr_cpu",
+      "task": "ocr",
+      "environment": "local-bench-rapidocr",
+      "worker": "workers/rapidocr_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 1},
+        {"processes": 1, "threads_per_process": 2},
+        {"processes": 1, "threads_per_process": 4},
+        {"processes": 1, "threads_per_process": 8},
+        {"processes": 2, "threads_per_process": 4},
+        {"processes": 3, "threads_per_process": 4},
+        {"processes": 4, "threads_per_process": 2},
+        {"processes": 6, "threads_per_process": 2},
+        {"processes": 8, "threads_per_process": 1}
+      ]
+    },
+    {
+      "id": "ppocrv6_tiny_cpu",
+      "task": "ocr",
+      "environment": "local-bench-paddleocr",
+      "worker": "workers/paddleocr_sustained_worker.py",
+      "configs": [
+        {"processes": 1, "threads_per_process": 4},
+        {"processes": 1, "threads_per_process": 8},
+        {"processes": 1, "threads_per_process": 16},
+        {"processes": 1, "threads_per_process": 24},
+        {"processes": 2, "threads_per_process": 8},
+        {"processes": 3, "threads_per_process": 8},
+        {"processes": 4, "threads_per_process": 4},
+        {"processes": 6, "threads_per_process": 4},
+        {"processes": 8, "threads_per_process": 2}
+      ]
+    }
+  ]
+}

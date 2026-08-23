@@ -29,7 +29,7 @@ COUNTERS = (
 
 
 class WindowsHostMonitor:
-    """Own one typeperf process and expose privacy-safe telemetry summaries."""
+    """Poll typeperf and expose privacy-safe telemetry summaries."""
 
     def __init__(self, sample_path: Path, interval_seconds: float = 2.0):
         self.sample_path = sample_path
@@ -39,51 +39,64 @@ class WindowsHostMonitor:
         self.start_error: str | None = None
         self._process: subprocess.Popen[str] | None = None
         self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._process_lock = threading.Lock()
         self._consecutive_hot = 0
         self._consecutive_passive_limit = 0
 
     def start(self) -> None:
-        command = [
-            "typeperf.exe",
-            *(counter for _, counter in COUNTERS),
-            "-si",
-            str(self.interval_seconds),
-        ]
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        try:
-            self._process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-            )
-        except OSError as error:
-            self.start_error = type(error).__name__
-            return
         self._thread = threading.Thread(target=self._read_samples, daemon=True)
         self._thread.start()
 
     def stop(self) -> dict:
-        process = self._process
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        self._stop.set()
+        with self._process_lock:
+            process = self._process
+            if process is not None and process.poll() is None:
+                process.terminate()
         if self._thread is not None:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=max(10.0, self.interval_seconds + 5.0))
         return self.summary()
 
     def _read_samples(self) -> None:
-        assert self._process is not None
-        assert self._process.stdout is not None
+        command = [
+            "typeperf.exe",
+            *(counter for _, counter in COUNTERS),
+            "-si",
+            str(max(1, round(self.interval_seconds))),
+            "-sc",
+            "1",
+        ]
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         expected_columns = len(COUNTERS) + 1
-        for line in self._process.stdout:
+        while not self._stop.is_set():
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=creationflags,
+                )
+            except OSError as error:
+                self.start_error = type(error).__name__
+                return
+            with self._process_lock:
+                self._process = process
+            stdout, _ = process.communicate()
+            with self._process_lock:
+                if self._process is process:
+                    self._process = None
+            if process.returncode != 0:
+                if not self._stop.is_set():
+                    self.start_error = "counter_process_exit"
+                return
+            self._parse_output(stdout, expected_columns)
+
+    def _parse_output(self, stdout: str, expected_columns: int) -> None:
+        for line in stdout.splitlines():
             if not line.startswith('"'):
                 continue
             try:

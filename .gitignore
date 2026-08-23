@@ -7,4 +7,7 @@ data/models/
 data/tools/
 data/inputs/generated/
 data/inputs/public/
+data/inputs/local/
+data/workloads/local*.json
+data/vendor/
 results/artifacts/
