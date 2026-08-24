@@ -137,7 +137,7 @@ generated code/formula control without appending an event:
 ```powershell
 & 'D:\Anaconda\envs\local-bench-ocrllm-master-f234f39\python.exe' scripts\check_ocrllm_image_facade.py `
   --image data\inputs\generated\ocr_quality\code_formula.png `
-  --manifest data\inputs\generated\ocr_quality\manifest.json
+  --manifest data\inputs\generated\ocr_quality\hunyuan_doc_quality.json
 ```
 
 The runner verifies isolated environments and required assets before reuse,

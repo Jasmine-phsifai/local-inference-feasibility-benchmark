@@ -9,6 +9,15 @@ def fingerprint_json(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def unique_fingerprint_paths(paths: list[Path]) -> list[Path]:
+    """Return one canonical entry for each file in a fingerprint union."""
+
+    unique_paths: dict[Path, None] = {}
+    for path in paths:
+        unique_paths.setdefault(path.resolve(strict=False), None)
+    return list(unique_paths)
+
+
 def fingerprint_files(paths: list[Path]) -> str:
     resolved_paths = [path.resolve(strict=True) for path in paths]
     if not resolved_paths:

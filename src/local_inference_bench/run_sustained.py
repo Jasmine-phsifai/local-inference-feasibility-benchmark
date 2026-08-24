@@ -14,7 +14,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .event_journal import append_event, read_events
-from .fingerprint import fingerprint_files, fingerprint_json
+from .fingerprint import (
+    fingerprint_files,
+    fingerprint_json,
+    unique_fingerprint_paths,
+)
 from .journal_integrity import effective_sustained_invalidated_attempt_ids
 from .load_registry import find_candidate, load_json
 from .load_sustained_workload import (
@@ -143,8 +147,10 @@ def run_sustained_candidate(
             artifact_files = tuple(_artifact_files(candidate, config))
             if artifact_files not in code_fingerprints:
                 code_fingerprints[artifact_files] = fingerprint_files(
-                    fingerprint_paths
-                    + [PROJECT_ROOT / path for path in artifact_files]
+                    unique_fingerprint_paths(
+                        fingerprint_paths
+                        + [PROJECT_ROOT / path for path in artifact_files]
+                    )
                 )
             code_fingerprint = code_fingerprints[artifact_files]
             attempt_key = fingerprint_json(

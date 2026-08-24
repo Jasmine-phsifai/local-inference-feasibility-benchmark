@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from local_inference_bench.fingerprint import fingerprint_files
+from local_inference_bench.fingerprint import (
+    fingerprint_files,
+    unique_fingerprint_paths,
+)
 
 
 def test_file_fingerprint_binds_relative_path_when_names_collide(
@@ -55,3 +58,17 @@ def test_file_fingerprint_rejects_empty_or_duplicate_inputs(tmp_path: Path) -> N
             pass
         else:  # pragma: no cover - explicit assertion keeps the test dependency-free
             raise AssertionError("invalid fingerprint inputs were accepted")
+
+
+def test_fingerprint_path_union_canonicalizes_overlapping_sources(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    paths = unique_fingerprint_paths([first, second, first.resolve()])
+
+    assert paths == [first.resolve(), second.resolve()]
+    assert fingerprint_files(paths) == fingerprint_files([second, first])
