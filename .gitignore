@@ -6,7 +6,21 @@ __pycache__/
 data/models/
 data/tools/
 data/downloads/
-data/inputs/generated/
+# Generated controls remain local by default. The five bounded VLM fixtures and
+# their two reference manifests are deliberately tracked: they contain invented
+# public benchmark text only and make the b10598 quality gate clone-reproducible.
+data/inputs/generated/*
+!data/inputs/generated/document_fidelity/
+data/inputs/generated/document_fidelity/*
+!data/inputs/generated/document_fidelity/ovisocr2_page_quality.json
+!data/inputs/generated/document_fidelity/page_008_table_columns.png
+!data/inputs/generated/ocr_quality/
+data/inputs/generated/ocr_quality/*
+!data/inputs/generated/ocr_quality/hunyuan_doc_quality.json
+!data/inputs/generated/ocr_quality/warmup.png
+!data/inputs/generated/ocr_quality/code_formula.png
+!data/inputs/generated/ocr_quality/dense_table.png
+!data/inputs/generated/ocr_quality/negative_diagram.png
 data/inputs/public/
 data/inputs/local/
 data/workloads/local*.json

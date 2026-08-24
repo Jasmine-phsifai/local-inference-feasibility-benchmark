@@ -1,25 +1,17 @@
 """Verify the isolated RapidOCR ORT/OpenVINO comparison environment."""
 
 import hashlib
+import json
+import sys
 
-from importlib.metadata import version
 from pathlib import Path
 
-import onnxruntime
-import openvino
-import rapidocr
-from rapidocr import EngineType, RapidOCR
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from local_inference_bench.verify_locked_environment import verify_locked_environment
 
 
-EXPECTED_PACKAGE_VERSIONS = {
-    "numpy": "2.2.6",
-    "onnxruntime": "1.29.0",
-    "opencv-python": "4.13.0.92",
-    "openvino": "2026.3.0",
-    "pillow": "12.3.0",
-    "psutil": "7.2.2",
-    "rapidocr": "3.9.2",
-}
 EXPECTED_MODEL_HASHES = {
     "PP-OCRv6_det_small.onnx": (
         "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f"
@@ -34,13 +26,19 @@ EXPECTED_MODEL_HASHES = {
 
 
 def main() -> None:
-    actual_versions = {
-        package: version(package) for package in EXPECTED_PACKAGE_VERSIONS
-    }
-    if actual_versions != EXPECTED_PACKAGE_VERSIONS:
-        raise RuntimeError(
-            f"RapidOCR OpenVINO environment version mismatch: {actual_versions}"
-        )
+    environment = verify_locked_environment(
+        PROJECT_ROOT
+        / "environments"
+        / "rapidocr_openvino"
+        / "requirements.lock.txt",
+        expected_python=(3, 11, 15),
+    )
+
+    import onnxruntime
+    import openvino
+    import rapidocr
+    from rapidocr import EngineType, RapidOCR
+
     if not RapidOCR or {
         EngineType.ONNXRUNTIME.value,
         EngineType.OPENVINO.value,
@@ -60,12 +58,16 @@ def main() -> None:
     if "CPU" not in core.available_devices:
         raise RuntimeError("OpenVINO CPU device is unavailable")
     print(
-        {
-            "versions": actual_versions,
-            "model_hashes": actual_model_hashes,
-            "onnxruntime_providers": onnxruntime.get_available_providers(),
-            "openvino_cpu": core.get_property("CPU", "FULL_DEVICE_NAME"),
-        }
+        json.dumps(
+            {
+                "status": "verified",
+                "environment": environment,
+                "model_hashes": actual_model_hashes,
+                "onnxruntime_providers": onnxruntime.get_available_providers(),
+                "openvino_cpu": core.get_property("CPU", "FULL_DEVICE_NAME"),
+            },
+            sort_keys=True,
+        )
     )
 
 

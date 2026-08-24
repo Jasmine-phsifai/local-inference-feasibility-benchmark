@@ -1,0 +1,6 @@
+name: local-bench-sensevoice-build
+channels:
+  - defaults
+dependencies:
+  - cmake=4.2.3=h93052ac_0
+  - ninja=1.13.1=haa95532_0

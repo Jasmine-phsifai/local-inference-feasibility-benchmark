@@ -1,357 +1,355 @@
-# Sustained OCR, source-faithful document OCR, and ASR on Core Ultra 9 285K
+# Sustained OCR and ASR on Core Ultra 9 285K
 
-Status: final measured recommendation
+Status: current measured recommendation
 
-Date: 2026-08-23
+Evidence cutoff: 2026-08-24
+
+The numeric winner rows below are the latest pre-source-freeze measurements.
+They remain decision evidence, but the tightened workload, containment, and
+provenance contracts require serialized confirmation from the frozen source
+before the exact rates are promoted as the final checkpoint.
 
 ## Decision summary
 
 | Decision | Recommendation | Measured basis |
 |---|---|---|
-| Bulk default OCR | RapidOCR 3.9.2 / PP-OCRv6 Small, ONNX Runtime, full 2000-pixel mode, classifier enabled, 8 processes x 2 threads | 14,646.44 images/hour over 10 minutes; generated-control NCER 0.001757; full mode won both separate private-course blind comparisons 9-to-2 |
-| Throughput-only OCR option | RapidOCR OpenVINO, same model/settings, 8 x 2 | Matched ABBA mean 16,451.33 images/hour, 6.62% faster than ORT, with identical generated quality; mean peak RSS was 9.00 GiB versus 2.98 GiB, so it is not the practical default |
-| Maximum-throughput OCR | PP-OCRv6 Tiny, 6 x 4 | 29,591.46 images/hour over 10 minutes, CV 0.0051; lower generated recall and a separate 9-to-2 blind loss to full RapidOCR |
-| Difficult-image escalation | PaddleOCR-VL 1.6 at a 512-token cap, only as a manual-review lane | It emitted structured layout/formula/table blocks and no negative-control text, but only 46.67 images/hour and poor control quality. No tested CPU VLM passed the unattended source-faithful gate |
-| Bulk default ASR | SenseVoice Small GGUF Q8, 3 processes x 8 threads | 116.86394 audio-hours/hour over 30 minutes, 195/195 successes, CV 0.0364, peak RSS 2.35 GiB, and best required-term recall 0.8718 |
-| Timestamped ASR | faster-whisper Small int8, 6 model workers x 4 threads | 33.79100 audio-hours/hour over 10 minutes; timestamp precision/recall 0.9329/0.7342. Transcript error and silence hallucination were worse than SenseVoice |
-| Higher-quality ASR escalation | Qwen3-ASR 0.6B HF-native OpenVINO CPU as a transcript-only second opinion, not an automatic replacement | NCER was slightly lower than SenseVoice, 0.1748 versus 0.1766, but term recall was lower, 0.7308 versus 0.8718, with no timestamps and about eight times lower throughput |
-| Practical CPU concurrency | Use runtime-specific modest workers, not one nominal 24-thread configuration | SenseVoice peaked at 3 x 8; RapidOCR at 8 x 2; PP Tiny selected 6 x 4; faster-whisper 24 x 1 was slower, less stable, and more than twice the memory of 6 x 4 |
-| Likely GPU crossover | None on this Intel iGPU; expect a discrete-GPU crossover first for autoregressive document VLMs, but it is unmeasured | Qwen CPU was 13.54% faster than `GPU.0` on identical outputs. No discrete GPU or CUDA device is present, so no numeric discrete-GPU crossover is claimed |
-| Future OCRLLM compatibility | Reuse the active image facade only for text-line compatibility; preserve structured/raw OCR outside it and keep ASR behind benchmark-owned adapters | The independently installed package retained 5/5 lines and 4/4 formula-like lines, but its public facade exposed neither geometry/confidence nor ASR |
+| Bulk default OCR | RapidOCR 3.9.2 / PP-OCRv6 Small, ONNX Runtime, full 2000-pixel mode, classifier enabled, 8 processes x 2 threads, OpenCV = 1 | 12,710.79 representative 1080p frames/h for 10 minutes; strongest generated accuracy; 27/30 blind preference votes and 9/10 consensus wins |
+| Throughput OCR | PP-OCRv6 Tiny, 6 x 4, OpenCV = 1 | 23,858.80 representative frames/h for 10 minutes; 3,985/3,985; approximately 1.88x Rapid throughput, but weaker quality |
+| Difficult-image escalation | Full-resolution RapidOCR plus human review | PaddleOCR-VL, OvisOCR2, and native/GGUF Hunyuan all failed unattended source-fidelity gates; use them only as experimental manual comparators |
+| Bulk default ASR | SenseVoice Small GGUF Q8, pinned v0.2 source runtime, 8 x 3 | 123.4018 audio h/h for 10 minutes; 622/622; generated-control NCER 0.176576 and zero silence false positives |
+| Timestamp ASR | faster-whisper Small int8, 10 resident workers x 2 threads | 27.9238 audio h/h for 10 minutes; full timestamp availability; mild variability warning |
+| Higher-quality ASR | No automatic lane qualifies; official OpenVINO GenAI Qwen3-ASR CPU is a manual second opinion | Better generated NCER than SenseVoice, but worse overall required-term recall and failed/capped representative 120-second chunks |
+| Practical CPU concurrency | SenseVoice 8 x 3; faster-whisper 10 x 2; RapidOCR 8 x 2; PP Tiny 6 x 4 | Several modest workers materially outperform one 24-thread process; library pools create more OS threads than the configured native-thread budget |
+| Likely GPU crossover | No qualified sustained/general Intel-iGPU crossover; a discrete GPU is most likely to cross first for generative OCR/VLM work, but was not present to measure | A public 11-second after-load smoke favored the iGPU, while CPU was 9.527% faster in the tracked matched 32-second Qwen comparison; other durations remain unqualified |
+| OCRLLM compatibility | Image facade for plain text, structured sidecar for geometry/formulas, benchmark-owned ASR adapters | Active master image facade works locally; no public local-ASR, FileTrans, long-audio, persistence/resume, or audio-worker facade exists |
 
-The difficult-image recommendation is deliberately a manual-review fallback,
-not a claim that PaddleOCR-VL is the most accurate OCR model. Conventional OCR
-remains the only tested unattended bulk path. Source-faithful VLM output must be
-validated before it can replace it.
+These choices optimize for this 24-processor, 64 GB, no-discrete-GPU host. They
+are not generic model rankings.
 
-## Host, safety, cost, and evidence boundary
+## Evidence and privacy boundary
 
-- Intel Core Ultra 9 285K; 24 physical and 24 logical processors visible.
-- 63.4 GiB usable RAM.
-- Intel integrated graphics using shared memory; no NVIDIA/CUDA device and no
-  visible NPU.
-- No firmware, BIOS, affinity, cooling, power-limit, security, or temperature
-  control was changed. Heavy inference jobs were serialized.
-- Accepted monitored runs recorded no performance-limit or thermal-throttle
-  flags. The accepted faster-whisper sustained event did not have host
-  thermal/power telemetry, so this statement is not generalized to it.
-- CPU package temperature is unavailable. The ACPI-zone reading is not treated
-  as package temperature.
-- No paid API was used. Electricity, network transfer, and unknown free-service
-  quota costs were not priced; this report does not claim zero cost.
-- Raw course video, frames, audio, references, predictions, and private paths
-  remain ignored. Tracked journals contain bounded aggregate metadata only.
-- The crawler was not used and was never on the critical path.
+A validated complete local lecture was located through read-only inspection of
+existing downloader state. It supplied ignored, de-identified samples only:
 
-Read-only inspection did not recover the specifically requested lecture files
-at their recorded locations. They are not claimed as benchmark inputs. An
-unrelated validated complete lecture, other existing private course samples,
-public audio, and deterministic generated controls supplied the representative
-workloads. No course identity, title, teacher/student name, transcript, frame,
-audio, credential, private path, or private hash is published.
+- one 20-minute mono PCM16 audio item;
+- ten independent 2-minute chunks for process/worker concurrency;
+- two bounded 32-second RMS-selected near-silence/speech controls;
+- ten masked 1920 x 1080 frames.
 
-## What this stage establishes
+Tracked lecture-derived evidence contains aggregate workload descriptions and
+measurements only. It contains no course identity, title, people, transcript,
+frame, audio, private path, source hash, original media metadata, source
+timestamp, or credential. Five tracked PNG fixtures and two manifests contain
+deterministic, invented benchmark content only. The crawler was not used and is
+not on the benchmark critical path.
 
-The original approximately 11-second public audio sample and three generated
-images established installation only. This stage adds:
+The masked frames cover projected slides, formulas, plots, tables, small mixed
+Chinese/English text, low contrast, UI chrome, and occlusion. They do not cover
+handwriting or code; deterministic public/generated controls cover those two
+cases. No trusted private transcript was available. Private ASR agreement is
+therefore a consistency/hallucination diagnostic, not WER or accuracy. The
+RMS-selected low-energy clip is not asserted to be absolute silence.
 
-- 10- and 30-minute sustained runs with process/worker sweeps across all 24
-  visible processors;
-- 10-minute mixed-language and silence-heavy ASR controls;
-- realistic 1080p OCR controls for projection, handwriting, formulas, code,
-  tables, blur, occlusion, and negative images;
-- two randomized blind comparisons on ignored course frames;
-- matched RapidOCR ORT/OpenVINO trials;
-- Qwen HF-native OpenVINO CPU/iGPU quality and throughput;
-- native Hunyuan FP32 compatibility plus two exact-repeat source-fidelity trials;
-- bounded community/runtime falsification gates;
-- active-library OCRLLM image-facade compatibility.
+The journals are append-only. Explicit invalidation/redaction rows supersede
+stale evidence; consumers must not count both an invalidated row and its
+replacement. The committed pre-existing prefixes were preserved exactly, while
+content-derived private attempt keys and misplaced aggregates were removed from
+the new suffix. Preserved legacy rows still contain opaque 16-hex attempt keys
+and 64-hex blind-judgment fingerprints whose inputs included private benchmark
+data. They are content-derived identifiers, not source-file hashes; no raw
+private content or path is published. Raw outputs and the pre-projection
+quarantine remain ignored.
 
-Model download, environment creation, bundle verification, cold load/compile,
-warm-up, steady inference, and quality scoring are recorded separately.
+## Sustained concurrency results
 
-## Sustained throughput and concurrency
+The four recommended configurations each ran for at least 600 steady seconds
+and recorded zero inference failures.
 
-| Candidate | Exact configuration | Duration | Completed | Throughput | CV | Peak RSS |
-|---|---|---:|---:|---:|---:|---:|
-| SenseVoice Small Q8 | 3 processes x 8 threads | 30 min | 195/195 | 116.863942 audio h/h | 0.036375 | 2.3547 GiB |
-| faster-whisper Small int8 | 1 process, 6 model workers x 4 threads | 10 min | 36/36 | 33.791004 audio h/h | 0.082769 | 2.4633 GiB |
-| RapidOCR full ORT | 8 x 2 | 10 min | 2,447/2,447 | 14,646.443 images/h | 0.010234 | 3.6669 GiB |
-| RapidOCR 1280/classifier off | 8 x 2 | 10 min | 4,155/4,155 | 24,882.066 images/h | 0.012604 | 2.2213 GiB |
-| PP-OCRv6 Tiny | 6 x 4 | 10 min | 4,939/4,939 | 29,591.461 images/h | 0.005120 | 4.9006 GiB |
+| Candidate | Configuration | Completed | Steady throughput | CV / last:first | Peak RSS | Peak OS threads | Mean host CPU | Package power mean / p95 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| SenseVoice v0.2 | 8 x 3 | 622/622 | 123.4018 audio h/h | 0.02460 / 1.05873 | 2.460 GiB | 76 | 98.75% | 238.50 / 252.03 W |
+| faster-whisper | 10 x 2 | 140/140 | 27.9238 audio h/h | 0.05127 / 0.89430 | 1.863 GiB | 193 | 85.76% | 152.47 / 185.32 W |
+| RapidOCR full | 8 x 2, OpenCV = 1 | 2,125/2,125 | 12,710.79 images/h | 0.02325 / 1.06778 | 2.937 GiB | 100 | 91.13% | 166.69 / 180.58 W |
+| PP-OCRv6 Tiny | 6 x 4, OpenCV = 1 | 3,985/3,985 | 23,858.80 images/h | 0.01669 / 1.01344 | 4.809 GiB | 130 | 99.57% | 190.99 / 201.66 W |
 
-The 30-minute SenseVoice attempt
-`f5baeb93-929f-4ee7-9c5e-f53eb7af3be2` ran 1,803.487 seconds:
+Canonical events are
+[SenseVoice line 325](../results/sustained-events.jsonl#L325),
+[faster-whisper line 313](../results/sustained-events.jsonl#L313),
+[RapidOCR line 358](../results/sustained-events.jsonl#L358), and
+[PP Tiny line 253](../results/sustained-events.jsonl#L253).
 
-- steady state 1,802.096 seconds;
-- p50/p95/max item latency 27.632/30.668/33.109 seconds;
-- mean process-tree CPU 89.42% of host and mean host CPU 96.25%;
-- mid-run median RSS ratio 1.000123 across 1,016 samples;
-- mean/p95 RAPL package power 231.52/252.42 W;
-- zero performance-limit and throttle flags.
+Cold/load and warm-up remain separate from steady throughput:
 
-Its separate 10-minute validation reached 103.953679 audio h/h. The two runs
-have different code/workload fingerprints and are independent validations, not
-a matched duration-only A/B, so they are not averaged.
-
-### Concurrency screens
-
-| Candidate | Selected | Challenger | Outcome |
+| Candidate | Load mean | Warm-up mean | Interpretation |
 |---|---:|---:|---|
-| SenseVoice | 3 x 8: 104.318 audio h/h screen | 4 x 8: 92.177; 8 x 8: 73.511 | Additional processes lost to contention |
-| faster-whisper | 6 x 4: 33.791 sustained, 2.463 GiB | 24 x 1: 32.273 screen, CV 0.2421, 5.448 GiB | 24 x 1 failed the promotion floor; no sustained follow-up |
-| RapidOCR full | 8 x 2: 13,951.733 screen | same | Selected |
-| PP-OCRv6 Tiny | 6 x 4: 28,079.423 screen | 8 x 3: 28,743.445 | 6 x 4 was only 2.37% slower and about 2.02 GiB smaller |
+| SenseVoice | 0.103 s | 0.793 s | Per-file CLI startup estimate after integrity hashing |
+| faster-whisper | 0.895 s | 6.878 s | Resident model |
+| RapidOCR | 0.262 s | 2.972 s | Eight resident pipelines |
+| PP Tiny | 0.812 s | 1.044 s | Six resident pipelines |
 
-The newest `transcribe.cpp` v0.2.1 true-batch path was also measured
-against SenseVoice. At 24 threads, batch 8 reached 51.9199 audio h/h, 2.72 times
-its own batch-1 rate, with zero native failures and 1.157 GiB steady peak RSS.
-It achieved only 44.4% of the established 116.864 audio h/h worker-pool result,
-so no sustained promotion was justified.
+The load semantics differ, so these values are not a model-loading leaderboard.
+Downloads, environment creation, and model acquisition are excluded.
 
-### RapidOCR ORT versus OpenVINO
+### What changed the scale conclusion
 
-Both backends used RapidOCR 3.9.2, the same verified PP-OCRv6 Small ONNX files,
-classifier on, full 2000-pixel mode, and 8 x 2. Two 60-second trials used
-alternating A/B order.
+- SenseVoice v0.2 at 8 x 3 improved the matched v0.1.9 pool by 7.991% and
+  reached 123.40x real time. A separate 20-minute, one-process compatibility
+  run completed in 23.527 seconds (51.0052x); it establishes long-file
+  execution, while the 123.40x result requires independent chunk concurrency.
+- faster-whisper 10 x 2 reached 27.92x versus only 12.02x for one 24-thread
+  worker. It is the practical batch setting, but its CV 0.05127 and last:first
+  0.8943 justify a mild variability warning. The 24 x 1 screen created 419 OS
+  threads and unstable tail latency and was rejected.
+- PP Tiny's matched OpenCV cap increased throughput only 1.36%, but reduced
+  peak thread count from about 300 to 130 and peak RSS by 2.67%. That reduction
+  in oversubscription is enough to make `opencv_threads=1` the default.
+- RapidOCR's balanced comparison improved mean throughput by 1.10%, reduced
+  peak thread count by 69.3%, and preserved quality. Its representative
+  sustained rate is 3.37% above the earlier uncapped baseline.
+- `KMP_BLOCKTIME=0` changed PP throughput by only about 0.3% and package power
+  by about 0.9%; it was not promoted.
 
-| Backend | Trial rates | Mean | Mean peak RSS | Generated quality |
-|---|---:|---:|---:|---|
-| ONNX Runtime 1.29 | 15,425.902; 15,433.733 images/h | 15,429.818 | 2.977 GiB | NCER 0.001757469 |
-| OpenVINO 2026.3 | 16,093.946; 16,808.706 images/h | 16,451.326 | 9.002 GiB | NCER 0.001757469 |
+This host exposes 24 processors, but `processes x configured threads` is not an
+OS-thread ceiling. OpenCV, ONNX Runtime, oneDNN/OpenMP, CTranslate2, Python, and
+monitoring add their own threads. The measured process-tree thread counts are
+therefore part of the recommendation.
 
-OpenVINO gained 6.62%, below the 10% promotion threshold, while using about
-three times the process-tree memory. It remains a throughput-only opt-in.
-RapidOCR creates one synchronous request per stage; sharing one engine across
-threads is not treated as safe concurrency. One engine per process is retained.
+## OCR quality
 
-## Recognition quality
+### Deterministic generated controls
 
-### ASR generated controls
+| Candidate | Samples | NCER | Required-token recall | Negative false characters |
+|---|---:|---:|---:|---:|
+| RapidOCR full | 7/7 | 0.001757 | 0.961538 | 0 |
+| PP-OCRv6 Tiny | 7/7 | 0.005272 | 0.923077 | 0 |
 
-All rows share the 10-sample `asr-quality-v3` set with public or
-independently generated references.
+The current provenance-bound events are
+[RapidOCR line 29](../results/quality-events.jsonl#L29) and
+[PP Tiny line 30](../results/quality-events.jsonl#L30). Generated controls test
+code, formulas, dense tables, bilingual text, and negative images. They are
+absolute references, but they are not a substitute for photographed-course
+evaluation.
 
-| Candidate | NCER | Mixed-token error | Term recall | Silence FP chars/min | Timestamp precision/recall |
-|---|---:|---:|---:|---:|---:|
-| SenseVoice Q8 | 0.176576 | 0.237113 | 0.871795 | 0 | unavailable |
-| Qwen3-ASR HF OpenVINO CPU | 0.174783 | 0.246392 | 0.730769 | 0 | unavailable |
-| Qwen3-ASR HF OpenVINO iGPU | 0.174783 | 0.246392 | 0.730769 | 0 | unavailable |
-| faster-whisper Small int8 | 0.351957 | 0.605155 | 0.653846 | 6.0 | 0.932902 / 0.734159 |
+### Randomized representative-frame comparison
 
-Qwen CPU processed the controls at 14.875039 audio h/h with 5.275 GiB peak
-host RSS. `GPU.0` produced exactly the same scored output at 13.100663
-audio h/h with 5.006 GiB host RSS and 2,085,217,046 bytes of observed current
-GPU allocation. CPU was 13.54% faster end to end. The GPU statistic is a
-current-allocation snapshot from a separate OpenVINO core, not an attributed
-historical peak.
+Three blinded judge runs from image-capable evaluators scored a salted,
+commitment-bound, randomized mapping of the ten masked lecture frames. Their
+independence was not verified. The current v4 aggregate at
+[quality line 37](../results/quality-events.jsonl#L37) reports:
 
-The released legacy Qwen OpenVINO route remains an implementation-specific
-blocker: both CPU and iGPU hit the token cap with degenerate repeated output.
-The HF-native `automatic-speech-recognition-with-past` export fixes that
-failure. It uses exact EOS/pad checks, per-component execution-device proof,
-and raw token health metrics.
+| Candidate | Win votes | Consensus wins | Mean error severity | Usable vote fraction |
+|---|---:|---:|---:|---:|
+| RapidOCR full | 27 | 9 | 0.4667 | 0.9667 |
+| PP-OCRv6 Tiny | 2 | 1 | 2.0333 | 0.7333 |
 
-### Conventional OCR generated controls
+There was one tie vote, 30 total votes, pairwise winner agreement 0.8667, and
+unanimity on 80% of samples. The mapping consistency and semantic-duplicate
+guard passed. This is a strong evaluator preference, not ground truth, and the
+three judges do not turn ten frames into thirty independent source samples.
 
-| Candidate | Samples | NCER | Required-token recall | False-positive chars | Line-count MAE |
-|---|---:|---:|---:|---:|---:|
-| RapidOCR full | 7 | 0.001757 | 0.961538 | 0 | 1.285714 |
-| RapidOCR 1280/off | 7 | 0.003515 | 0.961538 | 0 | 1.428571 |
-| PP-OCRv6 Medium | 7 | 0.003515 | 0.923077 | 0 | 1.285714 |
-| PP-OCRv6 Tiny | 7 | 0.005272 | 0.923077 | 0 | 1.714286 |
+The result explains the two-tier recommendation: RapidOCR is the quality-biased
+bulk default; PP Tiny is the throughput option.
 
-Two separate randomized, anonymized private-course comparisons used 12 samples,
-three judges, and 36 votes each. Full RapidOCR beat PP Tiny by 9 consensus wins
-to 2, with one tie. It beat RapidOCR 1280/off by the same 9-to-2 consensus
-count. These comparisons have different fingerprints and are not represented
-as one paired dataset.
+## ASR quality and long-audio behavior
 
-## Source-faithful document OCR
+The public/generated set contains ten Chinese, English, mixed-language,
+technical-term, abbreviation, number/formula narration, sparse speech,
+long-silence, and silence controls.
 
-The benchmark-owned `source-faithful.v1` contract follows the active and
-legacy OCRLLM behavior without importing the legacy package:
+| Candidate | NCER | Mixed-token error | Required-term recall | Silence false chars/min | Timestamp evidence |
+|---|---:|---:|---:|---:|---|
+| SenseVoice v0.2 | 0.176576 | 0.237113 | 0.871795 | 0 | unavailable |
+| Official Qwen3-ASR OpenVINO GenAI CPU | 0.128772 | 0.214433 | 0.743590 | 0 | unavailable |
+| faster-whisper auto language | 0.401852 | 0.646392 | 0.615385 | 6 | precision 0.90737; recall 0.70329 |
+| faster-whisper forced Chinese | 0.723036 | 0.950515 | 0.461538 | 108 | worse; rejected |
 
-- exactly one page/frame marker as the first line;
-- Markdown headings, paragraphs, lists, and reading order;
-- LaTeX delimiters and commands rather than Unicode lookalikes;
-- GitHub-Flavored Markdown pipe tables;
-- code fences only for visible code, with exact language, indentation, blank
-  lines, spelling, identifiers, signs, numbers, and units;
-- visible instructions treated as source content;
-- no solving, summarizing, translating, normalizing, autocorrecting, or
-  inventing.
+The canonical events are
+[faster-whisper lines 26-27](../results/quality-events.jsonl#L26-L27),
+[SenseVoice line 31](../results/quality-events.jsonl#L31), and
+[Qwen line 32](../results/quality-events.jsonl#L32).
 
-Three deterministic 1920 x 1080 controls exercise bilingual projected code,
-formula-board writing with a deliberate misspelling and an instruction-looking
-sentence, and a table/two-column reading-order page. The scorer uses raw output,
-normalizes only line endings and one terminal newline, and checks formula,
-table, code, indentation, Python parseability, protected spans, targeted
-inventions, reading order, Markdown CER, and exact repeatability. It requires
-two distinct records, attempts, keys, and trial indexes with identical
-configuration, code, environment, workload, and record hashes.
+SenseVoice is the only candidate that passes the bulk gate of high sustained
+throughput, generated-control NCER at or below 0.20, term recall at or above
+0.80, and zero silence false positives. It does not provide timestamps in this
+runtime. faster-whisper remains valuable specifically for timestamps; forcing
+Chinese is not a safe default for mixed lecture audio.
 
-### Native HunyuanOCR 1.5
+Qwen's lower NCER makes it a useful manual second opinion, not an automatic
+escalation. Its term recall is 12.82 percentage points below SenseVoice, and
+representative 120-second runs at the configured 512-token cap did not establish
+reliability:
 
-The native Transformers 5.13.0 / Torch 2.11 CPU path is compatible:
+- CPU, 512 tokens: 3/4 succeeded;
+- Intel iGPU, 512 tokens: 2/3 succeeded.
 
-- exact 2,239,932,512-byte checkpoint and auxiliary bundle verified;
-- FP32, eager attention, PIL/slow image processor, both EOS IDs
-  `[120007, 120020]`, pad `120002`;
-- one bounded 960-side compatibility page finished in 8.126 seconds,
-  443.04 images/hour, EOS 1, cap 0, peak RSS 5.218 GiB;
-- a prior 64-token result was explicitly invalidated after the compatibility
-  gate incorrectly accepted a token cap.
+The two-sample private ASR agreement event at
+[quality line 33](../results/quality-events.jsonl#L33) deliberately suppresses
+exact character aggregates for the small cohort. It confirms exact CPU/iGPU
+Qwen output on those controls and coarse cross-model agreement only. It cannot
+select a quality winner without a trusted transcript.
 
-The upstream slow-processor and dual-EOS requirements matter: Tencent and
-Transformers documented that stale EOS/input handling and the earlier fast
-processor could create repetition or garbled OCR
-([Tencent discussion](https://huggingface.co/tencent/HunyuanOCR/discussions/34),
-[Transformers fix](https://github.com/huggingface/transformers/pull/47499)).
-The native result therefore falsifies the old implementation blocker without
-reusing pre-fix output as model-quality evidence.
+## Official Qwen3-ASR OpenVINO GenAI and Intel iGPU
 
-Two full-resolution, three-page source-faithful trials then produced:
+The official stateful `ASRPipeline` export is independently pinned and verified;
+it is separate from the older Transformers/Optimum experiments.
 
-| Metric | Result |
-|---|---:|
-| Mean throughput | 56.7236 images/hour |
-| Mean peak RSS | 13.515 GiB |
-| Runtime failures / token caps | 0 / 0 |
-| EOS finishes | 6/6 |
-| Exact repeatability | 1.0 |
-| Markdown CER | 0.363739 |
-| Lexical precision / recall | 0.965909 / 0.611511 |
-| Protected-span recall | 0.928571 |
-| Exact marker / page sequence | 0 / fail |
-| Formula precision / recall | 0.333333 / 0.333333 |
-| Table shape / cells | 1.0 / 1.0 |
-| Code-fence / exact code lines / Python parse | 0 / 0 / 0 |
-| Reading-order pair accuracy | 0.355556 |
-| Forbidden inventions / Unicode-math substitutions | 2 / 4 |
-| Semantic gate / exact-profile gate | fail / fail |
+Four matched short CPU/iGPU pairs established timing. The tracked two-sample
+agreement event binds one CPU source attempt and one iGPU source attempt and
+reports exact-equal text for that evidenced pair:
 
-The raw outputs explain the aggregate: the model deterministically omitted
-markers and lower-page content, autocorrected the deliberate misspelling,
-replaced LaTeX operators with Unicode, altered formula notation, and emitted
-visible code without a fence or the required blank line. It did reconstruct the
-simple GFM table exactly. Native Hunyuan is therefore runnable and useful as a
-manual comparator, but not an unattended source-faithful escalation.
+| Device | Mean throughput | Result |
+|---|---:|---|
+| CPU | 15.7637 audio h/h | 9.527% faster than iGPU |
+| Intel iGPU | 14.3925 audio h/h | More variable; no speed crossover |
 
-### Other structured/VLM gates
+The OpenVINO GenAI encoder-tail comparison at
+[bounded line 8](../results/bounded-events.jsonl#L8) establishes source ancestry:
+stable 2026.3 lacks the fix and the associated nightly source contains it. Both
+produced identical transcript hashes on only two bounded controls. The event
+explicitly does not claim cryptographic wheel-to-source attestation, and it does
+not resolve the 120-second failures. The tested association is
+`2026.4.0.0.dev20260821`; no earlier universal nightly floor is claimed. Any
+future release must be checked by actual tag/build ancestry rather than inferred
+from version number.
 
-| Candidate | Bounded result | Decision |
-|---|---|---|
-| HunyuanOCR 1.5 F16 GGUF | 229.33 images/h on three smaller controls; NCER 1.2195, recall 0.4444, 18 negative-control false characters | Not a quality winner |
-| PaddleOCR-VL 1.6, 512 tokens | 46.67 images/h; NCER 1.0221, recall 0.4615; structured blocks; zero negative false text | Manual-review lane |
-| PaddleOCR-VL 1.6, 4096 tokens | 46.90 images/h with identical scored output | Larger cap adds no value |
-| Granite-Docling 258M FP32 | Official one-page path timed out fail-closed at 300.328 s with no DocTags or Markdown; peak RSS 2.438 GiB | Base CPU compatibility remains unverified; no retry or lane |
-| OvisOCR2 Q8/BF16 projector | Immutable pair could not finish downloading in fast mode; independent resume measured 0.183 MiB/s and about 84 minutes remaining | Resumable future falsification gate, no current inference claim |
+The practical conclusion is limited to the tracked duration and backend, not
+"iGPU always slower." No discrete GPU was present. A discrete GPU is most likely
+to change the economics first for generative VLM/OCR and long generative ASR,
+not for the already-fast conventional OCR and SenseVoice lanes, but that
+crossover remains unmeasured on this machine.
 
-Granite used the pinned
-[`982fe3b` model](https://huggingface.co/ibm-granite/granite-docling-258M/tree/982fe3b40f2fa73c365bdb1bcacf6c81b7184bfe),
-FP32 SDPA, and the official prompt. Its weight was independently verified as
-515,093,104 bytes with SHA-256
-`1cdad234deb1cde18ee6a586f849057f19851daf1fedce2e40aff791dbe46f61`.
-An independent falsification found that 1920 x 1080, 640 x 360, and 128 x 72
-inputs all become the same 13-tile 512 x 512 tensor under the official
-processor, so downscaling would not make a defensible smaller CPU gate.
+## Difficult-image and OCR VLM gates
 
-OvisOCR2 was the only new community discovery likely to change the
-difficult-page conclusion. The pinned
-[official model](https://huggingface.co/ATH-MaaS/OvisOCR2/tree/65c619d374b55d4152e85150fc1b003700bc1f0c)
-targets ordered Markdown/LaTeX but trains tables as HTML. Its raw custom-prompt
-gate remains unrun. HTML-to-GFM conversion is not assumed semantics-safe and
-would require a separately provenance-bound adapted-output evaluation.
+Completing an inference path is not the same as passing the source-fidelity
+gate.
+
+| Candidate | Bounded result | Fidelity result | Decision |
+|---|---|---|---|
+| OvisOCR2 Q8/BF16 projector, llama.cpp b10598 | 1/1, no cap, 324.52 images/h single-page estimate, 1.89 GB peak RSS | lexical precision 0.3312, recall 0.5532, table-cell exactness 0 | `experimental_quality_gate_failed` |
+| HunyuanOCR 1.5 F16 GGUF, llama.cpp b10598 | 3/3, no caps, 233.05 images/h, 4.09 GB peak RSS | NCER 1.0, token recall 0.4444, 18 false characters on negative control | `quality_blocker` |
+| Native HunyuanOCR 1.5 | Runnable on full-resolution controls | deterministic omissions, altered formulas, bad reading order, semantic/profile gates failed | manual comparator only |
+| PaddleOCR-VL 1.6 | Runnable at about 46.7 images/h in the earlier gate | NCER above 1 and low recall | manual structured comparator only |
+| Granite-Docling 258M | Official path timed out fail-closed at 300.328 s | no DocTags or Markdown emitted | no CPU lane |
+
+The fresh, fully hash-bound b10598 events are
+[Ovis line 9](../results/bounded-events.jsonl#L9) and
+[Hunyuan line 10](../results/bounded-events.jsonl#L10). They falsify the old
+implementation/acquisition blockers. The remaining blocker is recognition
+fidelity.
+
+Ovis uses the generic llama.cpp Qwen3.5 text plus Qwen3-VL projector route; the
+upstream llama.cpp tree has no Ovis-native converter or graph. The tested build
+is bound to the b10598 archive and source revision containing the Qwen-VL resize
+correction. That makes the local run reproducible but does not turn community
+GGUF compatibility into upstream Ovis support. The official model targets
+Markdown/LaTeX but emits HTML tables, so HTML-to-GFM conversion is not assumed
+semantics-safe.
+
+No tested CPU VLM is approved for unattended difficult-image escalation. The
+operational route is full-resolution RapidOCR plus human review; VLM output may
+be shown as a second opinion with raw structured output preserved.
 
 ## OCRLLM compatibility
 
-The active package was installed independently and non-editably at version
-0.1.0 from captured master snapshot
-`379726281e3c374bda65c1bd4a6bdf5c32cde0b3`. The existing local image
-facade:
+The active `master` package was installed independently, non-editably, and
+hash-compared against clean revision
+`f234f3958f9e55d5bb9993338792ffc0cadc01fe`, which descends from the reviewed
+baseline `47c12efe91640659a711c8bd3429dae6a4fe44f5`. No OCRLLM repository file
+was edited.
 
-- recognized the generated control in 2.904 seconds;
-- retained 5/5 raw text lines and 4/4 formula-like lines;
-- stayed memory-only and made zero network attempts;
-- did not expose RapidOCR polygons or line confidences;
-- exposed no public ASR symbols.
+The current canonical check at
+[quality line 36](../results/quality-events.jsonl#L36) reports:
 
-Text-only OCR can enter the facade without line loss, but the facade cannot
-preserve layout or formula semantics by itself after geometry/confidence is
-dropped. Future OCRLLM integration should retain a raw/structured sidecar and
-make any Markdown adapter explicit. Image checkpoint/resume and the worker
-remain image features. ASR, long audio, and FileTrans stay behind
-benchmark-owned thin adapters until the active library exposes a public API.
-`legacy_app.OCRLLM` is not a new dependency, and no OCRLLM repository
-file was edited.
+- 183 installed Python files byte-equal to the pinned snapshot;
+- 5 detected and 5 retained text lines, 147 output characters;
+- 2/5 exact required-token hits and 5/5 whitespace-insensitive hits;
+- mean internal RapidOCR confidence 0.978482;
+- zero facade/provider calls recorded by the bounded instrumentation; this is
+  not a universal network-zero claim;
+- memory-only output;
+- no facade-exposed polygons or line confidences and no detected LaTeX marker.
 
-## Latest upstream and community audit
+Plain text can enter the active image facade. Geometry, confidence, and
+structured Markdown/HTML/LaTeX must remain in a sidecar; the benchmark does not
+claim that HTML-to-GFM conversion preserves layout or formula semantics.
 
-Community material was used as a lead for local tests, never as ground truth.
-The search was frozen after candidates could no longer change a recommendation
-within a bounded run.
+Current master also exposes experimental provider-backed, short, in-memory MP3
+options with a configured 300-second validation limit. This is not a tested
+maximum. It does not expose a public local-ASR facade, FileTrans, long-audio
+path, audio persistence/resume, or audio worker. Local ASR candidates therefore
+remain behind benchmark-owned thin adapters. `legacy_app.OCRLLM` is not a new
+dependency.
 
-- [`transcribe.cpp` v0.2.1](https://github.com/handy-computer/transcribe.cpp/releases/tag/v0.2.1)
-  introduced genuine SenseVoice tensor batching. The local batch-1/2/4/8 screen
-  measured a real 2.72-times gain, but its best result was still less than half
-  the established multiprocess throughput.
-- Current
-  [faster-whisper](https://github.com/SYSTRAN/faster-whisper/releases/tag/v1.2.1)
-  and [CTranslate2 4.8.1](https://github.com/OpenNMT/CTranslate2/releases/tag/v4.8.1)
-  support the measured physical-core worker design. The new 24 x 1 challenger
-  failed locally. Batched-pipeline timestamp/context behavior is not assumed
-  equivalent to direct `WhisperModel` output.
-- [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
-  exposed the OpenVINO thread controls used in the matched test. Its synchronous
-  request path supports process-level isolation, not a shared-engine thread
-  shortcut.
-- [OpenVINO GenAI 2026.3](https://github.com/openvinotoolkit/openvino.genai/releases/tag/2026.3.0.0)
-  now lists Qwen3-ASR CPU/GPU as early release. It was not silently mixed into
-  the completed Optimum experiment: the pinned `openvino-genai` wheel is
-  absent, and neither existing IR is proven compatible with `ASRPipeline`.
-  Fast mode froze this as a future one-wheel constructor/parity gate, not a
-  technical infeasibility claim.
-- OvisOCR2 was retained only as a resumable future screen. GLM-OCR requires a
-  separate layout pipeline for full document structure; MinerU2.5 Pro marks
-  pure VLM CPU unsupported; NaviDC-OCR has only GPU/vLLM evidence; and
-  LightOnOCR's current GGUF path has an unresolved repeated-token regression.
-  None overturned a measured default.
+The older OCRLLM rows and the earlier unbound blind comparison are retained but
+explicitly invalidated at
+[quality lines 39-42](../results/quality-events.jsonl#L39-L42).
 
-No Reddit or community result supplied a controlled Windows/x86 measurement
-that overrode local evidence. Anecdotal quality reports are not substituted for
-the generated controls, blinded comparisons, or append-only events.
+## Linear warmed-capacity projections
 
-## Linear capacity projections
-
-These use only quality-qualified sustained winners. Downloads, cold load,
-queueing, I/O, human review, and workload shift are excluded.
+These projections use only the representative sustained winners. They exclude
+downloads, cold load, queueing, media decode/frame selection, I/O, human review,
+and workload shift.
 
 ### ASR
 
-| Workload | SenseVoice 116.8639 x | faster-whisper 33.7910 x |
-|---:|---:|---:|
-| 2.5 audio h | 1.28 min | 4.44 min |
-| 37.5 audio h | 19.25 min | 1.11 h |
-| 375 audio h | 3.21 h | 11.10 h |
-| 56,000 audio h | 479.19 h (19.97 d) | 1,657.25 h (69.05 d) |
+The scale assumptions are 2.5 audio hours per lecture, 37.5 per course, 375 for
+ten courses, and 56,000 long-term audio hours.
+
+| Scale | SenseVoice 123.4018x | faster-whisper 27.9238x |
+|---|---:|---:|
+| One lecture | 1.22 min | 5.37 min |
+| One course | 18.23 min | 1.34 h |
+| Ten courses | 3.04 h | 13.43 h |
+| Long term | 18.91 d | 83.56 d |
 
 ### OCR
 
-| Workload | Rapid full 14,646.44/h | Rapid 1280/off 24,882.07/h | PP Tiny 29,591.46/h |
-|---:|---:|---:|---:|
-| 50-80 images | 0.20-0.33 min | 0.12-0.19 min | 0.10-0.16 min |
-| 750-1,200 | 3.07-4.92 min | 1.81-2.89 min | 1.52-2.43 min |
-| 7,500-12,000 | 0.51-0.82 h | 0.30-0.48 h | 0.25-0.41 h |
-| 1.12-1.79 million | 76.47-122.21 h | 45.01-71.94 h | 37.85-60.49 h |
+Frame assumptions are 50-80 per lecture, 750-1,200 per course, 7,500-12,000
+for ten courses, and 1.12-1.79 million long term.
 
-The OpenVINO RapidOCR and native Hunyuan rates are not used for scale
-projections: the former has only matched 60-second evidence, and the latter
-failed the source-faithful quality gate.
+| Scale | RapidOCR 12,710.79/h | PP Tiny 23,858.80/h |
+|---|---:|---:|
+| One lecture | 0.24-0.38 min | 0.13-0.20 min |
+| One course | 3.54-5.66 min | 1.89-3.02 min |
+| Ten courses | 0.59-0.94 h | 0.31-0.50 h |
+| Long term | 88.11-140.82 h | 46.94-75.03 h |
+
+Public/generated-control rates remain separately labeled in the journal and are
+not averaged with representative 1080p rates.
+
+## Upstream and community findings that changed experiments
+
+Community sources were treated as leads, not ground truth. Primary source code,
+official documentation, and pinned assets determined what was tested locally.
+
+- [ONNX Runtime threading guidance](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)
+  supports one session set per process and explicit intra/inter-op control; it
+  also motivated measuring spin/oversubscription rather than assuming thread
+  counts.
+- [OpenCV `setNumThreads`](https://docs.opencv.org/4.10.0/db/de0/group__core__utils.html)
+  led directly to the successful RapidOCR and PP-OCR process-pool caps.
+- [Paddle CPU configuration](https://www.paddlepaddle.org.cn/inference/v3.0/api_reference/python_api_doc/Config/CPUConfig.html)
+  and predictor-pool guidance supported process isolation and the 24 configured
+  native-thread budget.
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and
+  [CTranslate2](https://github.com/OpenNMT/CTranslate2) source behavior led to
+  instrumenting actual queued/processing batches; Python calls in flight alone
+  are not proof of native concurrency.
+- The official
+  [OpenVINO GenAI tail fix](https://github.com/openvinotoolkit/openvino.genai/commit/0d35ded5bac2d39bf45d52cbc7156c087f50c80d)
+  narrowed the Qwen investigation to a specific partial-mel-chunk correction.
+- The pinned [llama.cpp b10598 release](https://github.com/ggml-org/llama.cpp/releases/tag/b10598),
+  [official OvisOCR2 checkpoint](https://huggingface.co/ATH-MaaS/OvisOCR2/tree/65c619d374b55d4152e85150fc1b003700bc1f0c),
+  and separately identified community GGUF enabled the bounded Ovis
+  falsification run without claiming upstream-native support.
+
+No Reddit or community anecdote supplied a controlled Windows/x86 result that
+overrode the local measurements. Community reports saved search time, but every
+recommendation above is tied to local append-only evidence.
 
 ## Reproduction and provenance
 
-Primary entry point:
+Primary sustained entry point:
 
 ```powershell
 & 'D:\Anaconda\envs\local-bench-control\python.exe' `
@@ -363,46 +361,60 @@ Primary entry point:
   --config-index <index>
 ```
 
-Generate the deterministic document controls:
+SenseVoice source runtimes are rebuilt through:
 
 ```powershell
-& 'D:\Anaconda\envs\local-bench-control\python.exe' `
-  scripts\generate_document_fidelity_controls.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts\prepare_sensevoice_sustained_assets.ps1
 ```
 
-Score two source-faithful trials:
+The tracked patches preserve the upstream eight-thread default and add an
+explicit thread option. Future rebuilds verify exact source/tag, llama.cpp,
+patch, compiler, CMake, Ninja, archive, and executable hashes. Historical
+measurements predate the last build-tool hash hardening and are not retroactively
+claimed to have used that future enforcement.
+
+One immutable VLM run and its independent public-event build use:
 
 ```powershell
-& 'D:\Anaconda\envs\local-bench-control\python.exe' `
-  -m local_inference_bench.score_document_fidelity `
-  --manifest data\inputs\generated\document_fidelity\manifest.json `
-  --records <trial-0-private-records.jsonl> `
-  --records <trial-1-private-records.jsonl> `
-  --candidate hunyuanocr_1_5_native_cpu `
-  --mode raw `
-  --append-journal results\quality-events.jsonl
+& 'D:\Anaconda\envs\local-bench-control\python.exe' scripts\run_bounded_vlm_b10598_quality.py `
+  --candidate <candidate-id> `
+  --output-dir results\artifacts\<new-run-directory>
+
+& 'D:\Anaconda\envs\local-bench-control\python.exe' scripts\build_bounded_vlm_v3_event.py `
+  --candidate <candidate-id> `
+  --run-dir results\artifacts\<new-run-directory> `
+  --output results\artifacts\<new-event.json>
 ```
 
-Append-only sources of truth:
+The bounded VLM registry verifies full SHA-256 and size for the release archive,
+runtime tree, entrypoints, models, projector/conversion lineage, manifests, and
+tracked generated images. The public builder independently rehashes request,
+response, records, logs, telemetry, producer code, and assets before emitting an
+aggregate-only event.
 
-- `results/events.jsonl` for installation and short feasibility;
-- `results/sustained-events.jsonl` for starts, successes, failures, and
-  explicit invalidations;
-- `results/quality-events.jsonl` for privacy-safe aggregate quality;
-- `results/bounded-events.jsonl` for aggregate community screens and
-  independently verified blockers;
-- ignored per-attempt artifacts for raw outputs and resource samples.
+The sustained runner verifies required assets before candidate startup,
+fingerprints configuration-specific artifacts, rejects duplicate config
+indices, and records complete, partial, and all-failed outcomes separately.
+Private successful records receive an ignored provenance sidecar binding their
+hash to candidate, task, phase, workload, configuration, trial, code, and
+environment. The corrected runner does not publish new private content-derived
+attempt keys; the preserved legacy-key limitation is disclosed above.
 
-The sustained runner verifies isolated environments before reuse and includes
-worker, monitor, loader, validator, setup verifier, environment manifest,
-candidate-specific prompt/export files, model/export artifact manifests,
-workload, hardware, phase, duration, and trial index in the attempt identity.
-Successful private records receive an ignored sidecar that binds their SHA-256
-to candidate, task, phase, workload, config, trial, code, and environment.
+The current regression result is 597 passed and 2 intentionally skipped. This
+is a trusted-local provenance chain, not a signed transparency log. Hardware
+identity, local monitors, and ignored sidecars can still be altered by someone
+with write access to the machine; the report claims reproducibility and bounded
+validation, not tamper-proof attestation.
 
-This is a trusted-local provenance chain, not a cryptographic transparency log:
-sidecars are not signed or independently corroborated against the journal, and
-same-host hardware is implicit in the attempt identity rather than repeated in
-the sidecar. The exact-profile control also represents the chosen GFM contract;
-it is stricter than semantic readability and is not a complete measure of
-photographed-lecture quality.
+## Remaining uncertainty
+
+- Repeat faster-whisper 10 x 2 for a strict rather than practical-warning
+  stability claim only if that distinction matters operationally.
+- Qwen needs 10/10 representative 120-second success after a verified tail-fix
+  runtime, followed by an independently checked >=10-minute reference subset,
+  before it can become an automatic ASR escalation.
+- A discrete-GPU crossover requires actual matched hardware. It cannot be
+  inferred from Intel-iGPU behavior.
+- More representative handwriting/code frames and an independently checked
+  private speech subset would reduce the current quality uncertainty.

@@ -1,5 +1,10 @@
 # Local inference feasibility report
 
+> Historical installation-stage snapshot. Its short synthetic throughput and
+> pending-candidate statements are preserved as measured history, but they are
+> superseded for current recommendations by
+> [sustained-quality-and-compatibility.md](sustained-quality-and-compatibility.md).
+
 Generated: 2026-08-22T20:40:28.709537+00:00
 
 > This stage measures installation, execution, and speed feasibility. It does not compare final recognition quality.
@@ -130,7 +135,7 @@ Best configuration: `{'threads': 24}`. Scales: lecture 2.5 h; course 37.5 h; ten
 - The fallback samples prove execution and plausible output only; use representative inputs for the later quality/error-rate stage.
 - PP-OCRv6 tiny was also tested with a three-image input batch; it did not beat the best sequential 8-thread run on this small sample.
 
-## Current recommendation
+## Historical recommendation (superseded)
 
 Use PP-OCRv6 tiny or multi-worker RapidOCR for bulk slides and SenseVoice GGUF for bulk audio. Reserve larger OCR/VLM models for difficult pages only after representative quality testing. Maximum threads were often slower, and the packaged Intel Vulkan path is not currently usable.
 

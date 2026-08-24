@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from local_inference_bench.event_journal import (
     append_event,
     read_events,
@@ -45,6 +49,28 @@ def test_append_preserves_complete_record_missing_only_newline(tmp_path):
     recovery = next(event for event in events if event["event"] == "journal_recovered")
     assert recovery["reason"] == "missing_final_newline"
     assert recovery["discarded_byte_count"] == 0
+
+
+def test_newline_terminated_invalid_json_fails_before_append(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_bytes(b'{"event":"valid"}\n{"event":}\n')
+
+    with pytest.raises(json.JSONDecodeError):
+        read_events(path)
+    with pytest.raises(json.JSONDecodeError):
+        append_event(path, {"event": "must_not_be_appended"})
+    assert b"must_not_be_appended" not in path.read_bytes()
+
+
+def test_failed_append_does_not_repair_tail_after_invalid_retained_record(tmp_path):
+    path = tmp_path / "events.jsonl"
+    original = b'{"event":"valid"}\n{"event":}\n{"torn":'
+    path.write_bytes(original)
+
+    with pytest.raises(json.JSONDecodeError):
+        append_event(path, {"event": "must_not_be_appended"})
+
+    assert path.read_bytes() == original
 
 
 def test_unterminated_attempt_is_detected():

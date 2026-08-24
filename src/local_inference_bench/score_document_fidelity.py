@@ -13,13 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .event_journal import append_event
-from .fingerprint import fingerprint_json
+from .fingerprint import fingerprint_files, fingerprint_json
 from .load_sustained_workload import load_sustained_workload
 from .score_ocr_quality import _levenshtein
 from .validate_public_summary import validate_public_summary
 
 
 PROTOCOL_VERSION = "source-faithful.v1"
+_SCORER_PROTOCOL = "document-fidelity-v2"
 _CANDIDATE_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,79}$")
 _MARKER = re.compile(
     r"^<!-- meta:(?:page number=[1-9][0-9]*|frame id=[a-z0-9][a-z0-9_-]{0,63}) -->$",
@@ -29,6 +30,16 @@ _HEADING = re.compile(r"^(#{1,6})[ \t]+.+$", re.MULTILINE)
 _PAGE_MARKER = re.compile(r"^<!-- meta:page number=([1-9][0-9]*) -->$")
 _FORMULA_UNICODE = frozenset("≤≥×−∑∇ηαβ→∂")
 _FENCE = chr(96) * 3
+_SOURCE_STATUSES = frozenset({"succeeded", "partial_failure", "all_failed"})
+_MAX_TRIAL_COUNT = 8
+_MAX_MANIFEST_BYTES = 1_000_000
+_MAX_RECORD_FILE_BYTES = 2_000_000
+_MAX_PROVENANCE_BYTES = 64_000
+_MAX_RECORDS_PER_TRIAL = 100
+_MAX_PREDICTION_CHARACTERS = 200_000
+_MAX_TOTAL_PREDICTION_CHARACTERS = 1_000_000
+_MAX_REFERENCE_CHARACTERS = 500_000
+_MAX_TOTAL_EDIT_CELLS = 5_000_000
 
 
 def main() -> None:
@@ -63,30 +74,46 @@ def score_document_fidelity(
         raise ValueError("candidate_id must be a bounded public identifier")
     if mode != "raw":
         raise ValueError("adapted fidelity requires a separately bound adapter")
-    if not records_paths:
-        raise ValueError("document fidelity scoring requires at least one trial")
+    if not 1 <= len(records_paths) <= _MAX_TRIAL_COUNT:
+        raise ValueError(
+            f"document fidelity scoring requires one to {_MAX_TRIAL_COUNT} trials"
+        )
     if len({path.resolve() for path in records_paths}) != len(records_paths):
         raise ValueError("document fidelity trials require distinct record files")
+    _require_bounded_file(
+        manifest_path,
+        maximum_bytes=_MAX_MANIFEST_BYTES,
+        label="manifest",
+    )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     references = _validate_manifest(manifest, manifest_path=manifest_path)
     workload = load_sustained_workload(manifest_path, expected_task="ocr")
     expected_ids = set(references)
     trials: list[dict[str, dict]] = []
     provenances: list[dict] = []
+    prediction_budget = [_MAX_TOTAL_PREDICTION_CHARACTERS]
     for records_path in records_paths:
-        records = _read_trial_records(records_path)
+        records = _read_trial_records(
+            records_path,
+            prediction_budget=prediction_budget,
+        )
         if set(records) != expected_ids:
             raise ValueError("document fidelity records must exactly match manifest IDs")
         trials.append(records)
-        provenances.append(
-            _read_records_provenance(
-                records_path,
-                candidate_id=candidate_id,
-                workload_fingerprint=workload["fingerprint"],
-            )
+        provenance = _read_records_provenance(
+            records_path,
+            candidate_id=candidate_id,
+            workload_fingerprint=workload["fingerprint"],
         )
+        _validate_source_status(
+            provenance["status"],
+            expected_ids=expected_ids,
+            records=records,
+        )
+        provenances.append(provenance)
     _validate_trial_provenance(provenances)
     scores: list[dict] = []
+    edit_budget = [_MAX_TOTAL_EDIT_CELLS]
     predictions_by_sample: dict[str, list[str]] = {
         sample_id: [] for sample_id in references
     }
@@ -94,17 +121,18 @@ def score_document_fidelity(
         for sample_id, reference in references.items():
             record = records[sample_id]
             prediction = record.get("prediction")
-            if type(record.get("success")) is not bool:
-                raise ValueError("document fidelity record success must be boolean")
-            if type(record.get("token_cap_hit", False)) is not bool:
-                raise ValueError("document fidelity token cap flag must be boolean")
-            if type(prediction) is not str and record["success"] is False:
+            if type(prediction) is not str:
                 prediction = ""
-            elif type(prediction) is not str:
-                raise ValueError("document fidelity records require raw prediction strings")
             canonical = _canonical_markdown(prediction)
             predictions_by_sample[sample_id].append(canonical)
-            scores.append(_score_sample(reference, canonical, record))
+            scores.append(
+                _score_sample(
+                    reference,
+                    canonical,
+                    record,
+                    edit_budget=edit_budget,
+                )
+            )
     metrics = _aggregate_scores(
         scores=scores,
         references=references,
@@ -117,6 +145,8 @@ def score_document_fidelity(
         "candidate_id": candidate_id,
         "mode": mode,
         "protocol": PROTOCOL_VERSION,
+        "scorer_protocol": _SCORER_PROTOCOL,
+        "scorer_fingerprint": _scorer_fingerprint(),
         "workload_class": "generated_quality_control",
         "dataset_fingerprint": _sha256(manifest_path),
         "workload_fingerprint": workload["fingerprint"],
@@ -129,6 +159,25 @@ def score_document_fidelity(
             {provenance["environment_fingerprint"] for provenance in provenances}
         ),
         "config_fingerprint": fingerprint_json(provenances[0]["config"]),
+        "source_attempts": [
+            {
+                "status": provenance["status"],
+                "attempt_id": provenance["attempt_id"],
+                "attempt_key": provenance["attempt_key"],
+                "config_fingerprint": fingerprint_json(provenance["config"]),
+                "config_index": provenance["config_index"],
+                "trial_index": provenance["trial_index"],
+                "code_fingerprint": provenance["code_fingerprint"],
+                "environment_fingerprint": provenance["environment_fingerprint"],
+                "controller_environment_fingerprint": provenance[
+                    "controller_environment_fingerprint"
+                ],
+                "execution_policy_fingerprint": provenance[
+                    "execution_policy_fingerprint"
+                ],
+            }
+            for provenance in provenances
+        ],
         "metrics": validate_public_summary(metrics),
     }
 
@@ -193,6 +242,11 @@ def _validate_manifest(
         ):
             raise ValueError("document fidelity image identity is invalid")
         _validate_reference(reference)
+    reference_characters = sum(
+        len(reference["expected_markdown"]) for reference in references.values()
+    )
+    if reference_characters > _MAX_REFERENCE_CHARACTERS:
+        raise ValueError("document fidelity reference budget exceeded")
     return {sample_id: references[sample_id] for sample_id in item_ids}
 
 
@@ -247,7 +301,16 @@ def _validate_reference(reference: object) -> None:
             raise ValueError(f"document fidelity {key} entries are invalid")
 
 
-def _read_trial_records(path: Path) -> dict[str, dict]:
+def _read_trial_records(
+    path: Path,
+    *,
+    prediction_budget: list[int],
+) -> dict[str, dict]:
+    _require_bounded_file(
+        path,
+        maximum_bytes=_MAX_RECORD_FILE_BYTES,
+        label="record",
+    )
     records: dict[str, dict] = {}
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -261,6 +324,29 @@ def _read_trial_records(path: Path) -> dict[str, dict]:
                 raise ValueError(
                     f"invalid or duplicate document sample ID at line {line_number}"
                 )
+            if len(records) >= _MAX_RECORDS_PER_TRIAL:
+                raise ValueError("document fidelity record count limit exceeded")
+            success = record.get("success")
+            token_cap_hit = record.get("token_cap_hit", False)
+            prediction = record.get("prediction")
+            if type(success) is not bool:
+                raise ValueError("document fidelity record success must be boolean")
+            if type(token_cap_hit) is not bool:
+                raise ValueError("document fidelity token cap flag must be boolean")
+            if success is True and type(prediction) is not str:
+                raise ValueError("document fidelity records require raw prediction strings")
+            if (
+                success is False
+                and prediction is not None
+                and type(prediction) is not str
+            ):
+                raise ValueError("document fidelity failed prediction must be a string")
+            prediction_characters = len(prediction) if type(prediction) is str else 0
+            if prediction_characters > _MAX_PREDICTION_CHARACTERS:
+                raise ValueError("document fidelity prediction length limit exceeded")
+            if prediction_characters > prediction_budget[0]:
+                raise ValueError("document fidelity prediction budget exceeded")
+            prediction_budget[0] -= prediction_characters
             records[sample_id] = record
     return records
 
@@ -274,12 +360,17 @@ def _read_records_provenance(
     path = records_path.with_name("records-provenance.json")
     if not path.is_file():
         raise ValueError("document fidelity records provenance is missing")
+    _require_bounded_file(
+        path,
+        maximum_bytes=_MAX_PROVENANCE_BYTES,
+        label="provenance",
+    )
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") != 1:
         raise ValueError("document fidelity records provenance is invalid")
     if (
         value.get("protocol") != "sustained-process-v1"
-        or value.get("status") != "succeeded"
+        or value.get("status") not in _SOURCE_STATUSES
         or value.get("candidate_id") != candidate_id
         or value.get("task") != "ocr"
         or value.get("phase") != "quality"
@@ -291,13 +382,20 @@ def _read_records_provenance(
     config = value.get("config")
     if not isinstance(config, dict) or config.get("mode") != "source_faithful":
         raise ValueError("document fidelity records require source-faithful config")
-    if type(value.get("trial_index")) is not int or value["trial_index"] < 0:
-        raise ValueError("document fidelity provenance trial index is invalid")
+    for key in ("config_index", "trial_index"):
+        if type(value.get(key)) is not int or value[key] < 0:
+            raise ValueError(f"document fidelity provenance {key} is invalid")
     try:
         uuid.UUID(value.get("attempt_id", ""))
     except (ValueError, TypeError, AttributeError) as error:
         raise ValueError("document fidelity provenance attempt ID is invalid") from error
-    for key in ("attempt_key", "code_fingerprint", "environment_fingerprint"):
+    for key in (
+        "attempt_key",
+        "code_fingerprint",
+        "environment_fingerprint",
+        "controller_environment_fingerprint",
+        "execution_policy_fingerprint",
+    ):
         if (
             type(value.get(key)) is not str
             or re.fullmatch(r"[0-9a-f]{16}", value[key]) is None
@@ -321,12 +419,56 @@ def _validate_trial_provenance(provenances: list[dict]) -> None:
     }
     if len(serialized_configs) != 1:
         raise ValueError("document fidelity trials must use one configuration")
-    if len({value["code_fingerprint"] for value in provenances}) != 1:
-        raise ValueError("document fidelity trials must use one code fingerprint")
-    if len({value["environment_fingerprint"] for value in provenances}) != 1:
-        raise ValueError(
-            "document fidelity trials must use one environment fingerprint"
-        )
+    for key, label in (
+        ("config_index", "config index"),
+        ("code_fingerprint", "code fingerprint"),
+        ("environment_fingerprint", "environment fingerprint"),
+        (
+            "controller_environment_fingerprint",
+            "controller environment fingerprint",
+        ),
+        ("execution_policy_fingerprint", "execution policy fingerprint"),
+    ):
+        if len({value[key] for value in provenances}) != 1:
+            raise ValueError(f"document fidelity trials must use one {label}")
+
+
+def _validate_source_status(
+    source_status: str,
+    *,
+    expected_ids: set[str],
+    records: dict[str, dict],
+) -> None:
+    successful_sample_count = sum(
+        records[sample_id]["success"] is True for sample_id in expected_ids
+    )
+    expected_status = (
+        "succeeded"
+        if successful_sample_count == len(expected_ids)
+        else "all_failed" if successful_sample_count == 0 else "partial_failure"
+    )
+    if source_status != expected_status:
+        raise ValueError("document fidelity source status does not match records")
+
+
+def _scorer_fingerprint() -> str:
+    module_path = Path(__file__).resolve()
+    return fingerprint_files(
+        [
+            module_path,
+            module_path.with_name("fingerprint.py"),
+            module_path.with_name("load_sustained_workload.py"),
+            module_path.with_name("score_ocr_quality.py"),
+            module_path.with_name("validate_public_summary.py"),
+        ]
+    )
+
+
+def _require_bounded_file(path: Path, *, maximum_bytes: int, label: str) -> None:
+    if not path.is_file():
+        raise ValueError(f"document fidelity {label} file is missing")
+    if path.stat().st_size > maximum_bytes:
+        raise ValueError(f"document fidelity {label} file budget exceeded")
 
 
 def _canonical_markdown(value: str) -> str:
@@ -336,7 +478,13 @@ def _canonical_markdown(value: str) -> str:
     return normalized[:-1] if normalized.endswith("\n") else normalized
 
 
-def _score_sample(reference: dict, prediction: str, record: dict) -> dict:
+def _score_sample(
+    reference: dict,
+    prediction: str,
+    record: dict,
+    *,
+    edit_budget: list[int],
+) -> dict:
     expected = _canonical_markdown(reference["expected_markdown"])
     markers = _MARKER.findall(prediction)
     first_line = prediction.split("\n", 1)[0]
@@ -402,8 +550,26 @@ def _score_sample(reference: dict, prediction: str, record: dict) -> dict:
         "lexical_expected": sum(expected_tokens.values()),
         "lexical_predicted": sum(predicted_tokens.values()),
         "reference_characters": len(expected),
-        "edit_distance": _levenshtein(expected, prediction),
+        "edit_distance": _bounded_levenshtein(
+            expected,
+            prediction,
+            edit_budget,
+        ),
     }
+
+
+def _bounded_levenshtein(
+    left: str,
+    right: str,
+    edit_budget: list[int],
+) -> int:
+    if left == right or not left or not right:
+        return _levenshtein(left, right)
+    cells = len(left) * len(right)
+    if cells > edit_budget[0]:
+        raise ValueError("document fidelity edit-distance budget exceeded")
+    edit_budget[0] -= cells
+    return _levenshtein(left, right)
 
 
 def _extract_formulas(value: str) -> list[str]:

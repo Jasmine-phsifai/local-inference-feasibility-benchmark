@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "candidate_ids": [
+    "ppocrv6_tiny_cpu",
+    "ppocrv6_medium_cpu"
+  ],
+  "models": [
+    {
+      "name": "PP-OCRv6_tiny_det",
+      "repository": "PaddlePaddle/PP-OCRv6_tiny_det",
+      "revision": "d3177d4e5551463292a61e27cfca2b53e7c3fe9d"
+    },
+    {
+      "name": "PP-OCRv6_tiny_rec",
+      "repository": "PaddlePaddle/PP-OCRv6_tiny_rec",
+      "revision": "0736086f72f666350ebcdc0c3a504eeac89cdfad"
+    },
+    {
+      "name": "PP-OCRv6_medium_det",
+      "repository": "PaddlePaddle/PP-OCRv6_medium_det",
+      "revision": "8e0f56fb2ef86b461d99cfc7ac5c137738985f61"
+    },
+    {
+      "name": "PP-OCRv6_medium_rec",
+      "repository": "PaddlePaddle/PP-OCRv6_medium_rec",
+      "revision": "e5a92bcbc5cc1b494628e458d267778f0704fd7c"
+    }
+  ],
+  "native_runtime": {
+    "conda_package": "vcomp14",
+    "version": "14.44.35208",
+    "build": "h4927774_12",
+    "dll_relative_path": "vcomp140.dll",
+    "size_bytes": 193184,
+    "sha256": "e7e50211906ab1c6226a3133fda8d8c8e35a23a8b6c6133c9606601604680b85"
+  },
+  "required_files": [
+    {
+      "path": "PP-OCRv6_medium_det/.gitattributes",
+      "size_bytes": 2132,
+      "sha256": "16a369b9b94903ada962eff2255c71a84238e4d8e475b6ce64768b0c1bd4d811"
+    },
+    {
+      "path": "PP-OCRv6_medium_det/configuration.json",
+      "size_bytes": 71,
+      "sha256": "2e1c5a9e1cdae7ee2a28ac27d4e25172029cfa661cbeb4418f6be9998ef02f79"
+    },
+    {
+      "path": "PP-OCRv6_medium_det/inference.json",
+      "size_bytes": 312150,
+      "sha256": "0f1a7ec35da36173529c7a60238b7f7919e3831929c3f700ad90ad4896adecd5"
+    },
+    {
+      "path": "PP-OCRv6_medium_det/inference.pdiparams",
+      "size_bytes": 61960476,
+      "sha256": "85218d2e3d98f5a21c58b4220627be923a97aee5db3cc71f39536ab31ac53960"
+    },
+    {
+      "path": "PP-OCRv6_medium_det/inference.yml",
+      "size_bytes": 886,
+      "sha256": "7298d5ead546584af2504d03355f881ac7a7bc0eb1e282d3e159277c1d0af871"
+    },
+    {
+      "path": "PP-OCRv6_medium_det/README.md",
+      "size_bytes": 23247,
+      "sha256": "59f37b08a9a49aa6c1275e7b0363991353582f4dc7676539a5d2b05aab57e744"
+    },
+    {
+      "path": "PP-OCRv6_medium_rec/.gitattributes",
+      "size_bytes": 1575,
+      "sha256": "a3a43406012ee8c7b9b38dfab1b11610f33e8245cd864a9a9302d042616a859e"
+    },
+    {
+      "path": "PP-OCRv6_medium_rec/inference.json",
+      "size_bytes": 221814,
+      "sha256": "0b2e25e990bd072f1bf77d59d67d508bce6c4bd44af6624e0fb27d6da2cd00e8"
+    },
+    {
+      "path": "PP-OCRv6_medium_rec/inference.pdiparams",
+      "size_bytes": 76465087,
+      "sha256": "1b01c79a914587933f615569e75de54f2e638ebb5d3f3b3c1b38c24ede8c7319"
+    },
+    {
+      "path": "PP-OCRv6_medium_rec/inference.yml",
+      "size_bytes": 150580,
+      "sha256": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+    },
+    {
+      "path": "PP-OCRv6_medium_rec/README.md",
+      "size_bytes": 23474,
+      "sha256": "75ff9c4853ed171f36224127805062f9bcd1cfbbcacae3d577344866df74f6d3"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/.gitattributes",
+      "size_bytes": 2132,
+      "sha256": "16a369b9b94903ada962eff2255c71a84238e4d8e475b6ce64768b0c1bd4d811"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/configuration.json",
+      "size_bytes": 71,
+      "sha256": "2e1c5a9e1cdae7ee2a28ac27d4e25172029cfa661cbeb4418f6be9998ef02f79"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/inference.json",
+      "size_bytes": 229184,
+      "sha256": "935c18972799dd8f2a2ff424b9f8b2c6adee4b89f3a76f0746210ec33ba9b3d8"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/inference.pdiparams",
+      "size_bytes": 1718055,
+      "sha256": "853f7ed317d4f2f80de646842e5bbc32f9d39c601562cbe466cda42e4bafb1b1"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/inference.yml",
+      "size_bytes": 883,
+      "sha256": "3ac018be6f97499a08faa3bbdeb33640968d9307f6736d152902747a9f259593"
+    },
+    {
+      "path": "PP-OCRv6_tiny_det/README.md",
+      "size_bytes": 23222,
+      "sha256": "4b788667423f387c4d917a79d913c13595bc3592ae84756965dec7242a0a389d"
+    },
+    {
+      "path": "PP-OCRv6_tiny_rec/.gitattributes",
+      "size_bytes": 1575,
+      "sha256": "a3a43406012ee8c7b9b38dfab1b11610f33e8245cd864a9a9302d042616a859e"
+    },
+    {
+      "path": "PP-OCRv6_tiny_rec/inference.json",
+      "size_bytes": 108959,
+      "sha256": "b5b14770c7dcf092781e92f4278a2ae5f95048f08b4b8a04140e88cb2745f147"
+    },
+    {
+      "path": "PP-OCRv6_tiny_rec/inference.pdiparams",
+      "size_bytes": 4420410,
+      "sha256": "bb2f8f54d1e25f28c71b6fa4fe23f5940e159cae27fbee96155c99f822156e57"
+    },
+    {
+      "path": "PP-OCRv6_tiny_rec/inference.yml",
+      "size_bytes": 55571,
+      "sha256": "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"
+    },
+    {
+      "path": "PP-OCRv6_tiny_rec/README.md",
+      "size_bytes": 23488,
+      "sha256": "b39a61b887fe5ddc201a15d92b6814bb9e634fb5acb66db3f29ba53cff7d108c"
+    }
+  ]
+}

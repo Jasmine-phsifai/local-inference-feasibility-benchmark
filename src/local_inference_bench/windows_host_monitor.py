@@ -40,6 +40,7 @@ class WindowsHostMonitor:
         self._process: subprocess.Popen[str] | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._process_lock = threading.Lock()
         self._consecutive_hot = 0
         self._consecutive_passive_limit = 0
@@ -48,14 +49,30 @@ class WindowsHostMonitor:
         self._thread = threading.Thread(target=self._read_samples, daemon=True)
         self._thread.start()
 
+    def wait_until_ready(self, timeout_seconds: float) -> bool:
+        """Wait for one valid sample and fail closed on monitor startup errors."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if not self._ready.wait(timeout_seconds):
+            return False
+        return self.start_error is None and bool(self.samples)
+
     def stop(self) -> dict:
         self._stop.set()
+        self._ready.set()
         with self._process_lock:
             process = self._process
             if process is not None and process.poll() is None:
-                process.terminate()
+                try:
+                    process.terminate()
+                except OSError as error:
+                    if self.start_error is None:
+                        self.start_error = type(error).__name__
         if self._thread is not None:
             self._thread.join(timeout=max(10.0, self.interval_seconds + 5.0))
+            if self._thread.is_alive() and self.start_error is None:
+                self.start_error = "stop_timeout"
         return self.summary()
 
     def _read_samples(self) -> None:
@@ -70,6 +87,7 @@ class WindowsHostMonitor:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         expected_columns = len(COUNTERS) + 1
         while not self._stop.is_set():
+            process = None
             try:
                 process = subprocess.Popen(
                     command,
@@ -80,20 +98,23 @@ class WindowsHostMonitor:
                     errors="replace",
                     creationflags=creationflags,
                 )
-            except OSError as error:
+                with self._process_lock:
+                    self._process = process
+                stdout, _ = process.communicate()
+                if process.returncode != 0:
+                    if not self._stop.is_set():
+                        self.start_error = "counter_process_exit"
+                        self._ready.set()
+                    return
+                self._parse_output(stdout, expected_columns)
+            except Exception as error:
                 self.start_error = type(error).__name__
+                self._ready.set()
                 return
-            with self._process_lock:
-                self._process = process
-            stdout, _ = process.communicate()
-            with self._process_lock:
-                if self._process is process:
-                    self._process = None
-            if process.returncode != 0:
-                if not self._stop.is_set():
-                    self.start_error = "counter_process_exit"
-                return
-            self._parse_output(stdout, expected_columns)
+            finally:
+                with self._process_lock:
+                    if self._process is process:
+                        self._process = None
 
     def _parse_output(self, stdout: str, expected_columns: int) -> None:
         for line in stdout.splitlines():
@@ -128,6 +149,7 @@ class WindowsHostMonitor:
                 handle.write(json.dumps(sample, sort_keys=True) + "\n")
                 handle.flush()
             self._update_stop_reason(sample)
+            self._ready.set()
 
     def _update_stop_reason(self, sample: dict) -> None:
         if self.stop_reason is not None:
@@ -168,9 +190,13 @@ class WindowsHostMonitor:
                 "package_temperature_available": False,
             }
         cpu_utility = [sample["cpu_utility_percent"] for sample in self.samples]
-        frequency = [sample["cpu_actual_frequency_mhz"] for sample in self.samples]
+        frequency = [
+            sample["cpu_actual_frequency_mhz"]
+            for sample in self.samples
+            if sample["cpu_actual_frequency_mhz"] > 0
+        ]
         power = [sample["rapl_package_power_watts"] for sample in self.samples]
-        return {
+        summary = {
             "status": (
                 "stopped_by_guard"
                 if self.stop_reason
@@ -181,8 +207,7 @@ class WindowsHostMonitor:
             "package_temperature_available": False,
             "mean_cpu_utility_percent": statistics.fmean(cpu_utility),
             "p95_cpu_utility_percent": _percentile(cpu_utility, 0.95),
-            "minimum_cpu_frequency_mhz": min(frequency),
-            "mean_cpu_frequency_mhz": statistics.fmean(frequency),
+            "cpu_frequency_available": bool(frequency),
             "minimum_performance_limit_percent": min(
                 sample["cpu_performance_limit_percent"] for sample in self.samples
             ),
@@ -210,6 +235,14 @@ class WindowsHostMonitor:
             "mean_rapl_package_power_watts": statistics.fmean(power),
             "p95_rapl_package_power_watts": _percentile(power, 0.95),
         }
+        if frequency:
+            summary.update(
+                {
+                    "minimum_cpu_frequency_mhz": min(frequency),
+                    "mean_cpu_frequency_mhz": statistics.fmean(frequency),
+                }
+            )
+        return summary
 
 
 def _percentile(values: list[float], quantile: float) -> float:

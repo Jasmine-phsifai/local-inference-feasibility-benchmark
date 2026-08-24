@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "task": "ocr",
+  "workload_class": "generated_quality_control",
+  "disclosure": "Deterministic rendered controls are exact-reference tests, not a substitute for camera-captured lecture images.",
+  "warmup": {
+    "id": "warmup",
+    "path": "warmup.png",
+    "expected_text": true
+  },
+  "items": [
+    {
+      "id": "code_formula",
+      "path": "code_formula.png",
+      "expected_text": true
+    },
+    {
+      "id": "dense_table",
+      "path": "dense_table.png",
+      "expected_text": true
+    },
+    {
+      "id": "negative_diagram",
+      "path": "negative_diagram.png",
+      "expected_text": false
+    }
+  ],
+  "references": {
+    "code_formula": {
+      "category": "code_formula",
+      "lines": [
+        "def kalman_update(x, P, z):",
+        "    K = P @ H.T @ inv(H @ P @ H.T + R)",
+        "    return x + K @ (z - H @ x)",
+        "P_k = (I - K_k H) P_(k-1)",
+        "复杂度: O(n³)   test_id = 0x2A7F"
+      ],
+      "required_tokens": [
+        "def kalman_update(x, P, z):",
+        "    K = P @ H.T @ inv(H @ P @ H.T + R)",
+        "    return x + K @ (z - H @ x)",
+        "P_k = (I - K_k H) P_(k-1)",
+        "复杂度: O(n³)   test_id = 0x2A7F"
+      ],
+      "image_sha256": "3ff7a268928be00e61cb097208472873701cd53ad81573bfab0c1a3c1c036793"
+    },
+    "dense_table": {
+      "category": "dense_table",
+      "lines": [
+        "Model Precision Recall Throughput",
+        "Tiny 92.4% 88.1% 28,743 img/h",
+        "Small 95.2% 91.7% 13,952 img/h",
+        "备注：CPU-only, batch = 1"
+      ],
+      "required_tokens": [
+        "Model Precision Recall Throughput",
+        "Tiny 92.4% 88.1% 28,743 img/h",
+        "Small 95.2% 91.7% 13,952 img/h",
+        "备注：CPU-only, batch = 1"
+      ],
+      "image_sha256": "0b623a79edb905ead733a654f769d02e7ba58cfcc80487ccd0bc2c8fbc8501b1"
+    },
+    "negative_diagram": {
+      "category": "negative",
+      "lines": [],
+      "required_tokens": [],
+      "image_sha256": "6c5de8e95ec30f6985cf15fd0057d377148b7f2e86cdd32cc98e99181ebbde5f"
+    }
+  },
+  "subset": {
+    "source": "deterministic_ocr_quality_controls",
+    "sample_count": 3
+  },
+  "generator": {
+    "protocol": "rendered-ocr-controls.v1",
+    "canvas_width": 1920,
+    "canvas_height": 1080,
+    "pillow_version": "12.3.0",
+    "font_files": {
+      "msyh.ttc": "d79c55e68b1131eea0cc1c47be4f572d964f28c682e143db2ad09c1e4cb07a3f",
+      "consola.ttf": "cf00b507b3286870cc5064ebd0633c303f70b491a4af25eec2d32df413db0179",
+      "Inkfree.ttf": "c8ab96bc49ec1dc36936b5973fc143ca222c1a33ab27b87071a3bbc44d34ca9a"
+    }
+  }
+}

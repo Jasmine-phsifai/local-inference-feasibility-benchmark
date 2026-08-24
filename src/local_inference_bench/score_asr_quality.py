@@ -5,20 +5,45 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .event_journal import append_event
+from .fingerprint import fingerprint_files, fingerprint_json
+from .load_sustained_workload import load_sustained_workload
 from .validate_public_summary import validate_public_summary
 
 
+_CANDIDATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_CATEGORY_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_MAX_PREDICTION_CHARACTERS = 200_000
+_MAX_TOTAL_PREDICTION_CHARACTERS = 500_000
+_MAX_REFERENCE_CHARACTERS = 200_000
+_MAX_TOTAL_REFERENCE_CHARACTERS = 500_000
+_MAX_REQUIRED_TERMS = 256
+_MAX_ALIASES_PER_TERM = 16
+_MAX_ALIAS_CHARACTERS = 256
+_MAX_TOTAL_ALIAS_CHARACTERS = 100_000
+_MAX_SPEECH_INTERVALS = 10_000
+_MAX_TOTAL_EDIT_CELLS = 5_000_000
 _SENSEVOICE_TAG = re.compile(r"<\|[^|]*\|>")
 _MIXED_TOKEN = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff]|[a-z]+(?:-[a-z]+)*|[0-9]+(?:\.[0-9]+)?",
     re.IGNORECASE,
 )
+_REFERENCE_FIELDS = {
+    "audio_sha256",
+    "category",
+    "expected_speech",
+    "required_terms",
+    "speech_intervals",
+    "transcript",
+}
+_SOURCE_STATUSES = frozenset({"succeeded", "partial_failure", "all_failed"})
 
 
 def main() -> None:
@@ -48,35 +73,70 @@ def score_asr_quality(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("task") != "asr" or not isinstance(manifest.get("references"), dict):
         raise ValueError("ASR quality manifest requires a references mapping")
+    if manifest.get("workload_class") != "generated_quality_control":
+        raise ValueError("ASR quality scoring accepts generated controls only")
+    if _CANDIDATE_ID.fullmatch(candidate_id) is None:
+        raise ValueError("ASR quality candidate ID must be a public identifier")
+    workload = load_sustained_workload(manifest_path, expected_task="asr")
+    provenance = _verify_records_provenance(
+        records_path,
+        candidate_id=candidate_id,
+        workload_fingerprint=workload["fingerprint"],
+    )
     records = _read_records(records_path)
     references = manifest["references"]
-    items = {item["id"]: item for item in manifest.get("items", [])}
+    items = {item["id"]: item for item in workload["items"]}
+    if set(references) != set(items):
+        raise ValueError("ASR quality references must match workload items")
     unknown = set(records) - set(references)
     if unknown:
         raise ValueError("ASR records contain sample IDs outside the manifest")
+    _validate_source_status(
+        provenance["status"],
+        expected_ids=set(references),
+        records=records,
+    )
 
     sample_scores = []
+    edit_budget = [_MAX_TOTAL_EDIT_CELLS]
+    reference_character_budget = [_MAX_TOTAL_REFERENCE_CHARACTERS]
+    alias_character_budget = [_MAX_TOTAL_ALIAS_CHARACTERS]
     for sample_id, reference in references.items():
+        reference = _validated_reference(
+            reference,
+            media_path=Path(items[sample_id]["path"]),
+            duration_seconds=float(items[sample_id]["duration_seconds"]),
+            expected_speech=bool(items[sample_id]["expected_speech"]),
+            reference_character_budget=reference_character_budget,
+            alias_character_budget=alias_character_budget,
+        )
         record = records.get(sample_id)
-        prediction = "" if record is None else str(record.get("prediction", ""))
+        missing_record = record is None
+        success = record is not None and record["success"]
+        explicit_failed_record = record is not None and not record["success"]
+        prediction = record["prediction"] if success else ""
         sample_scores.append(
             _score_sample(
                 category=reference["category"],
-                reference_text=str(reference.get("transcript", "")),
+                reference_text=reference["transcript"],
                 prediction=prediction,
                 required_terms=reference.get("required_terms", []),
-                expected_speech=bool(reference.get("expected_speech", True)),
+                expected_speech=items[sample_id]["expected_speech"],
                 duration_seconds=float(items[sample_id]["duration_seconds"]),
                 speech_intervals=reference.get("speech_intervals", []),
-                segments=[] if record is None else record.get("segments"),
-                failed=record is None or not record.get("success", False),
+                segments=record.get("segments") if success else None,
+                failed=not success,
+                explicit_failed_record=explicit_failed_record,
+                missing_record=missing_record,
+                edit_budget=edit_budget,
             )
         )
 
     metrics = validate_public_summary(_aggregate_scores(sample_scores))
     return {
         "event": "asr_quality_scored",
-        "scorer_protocol": "asr-quality-v3",
+        "scorer_protocol": "asr-quality-v6",
+        "scorer_fingerprint": _scorer_fingerprint(),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "candidate_id": candidate_id,
         "workload_class": manifest.get(
@@ -84,23 +144,223 @@ def score_asr_quality(
             "generated_quality_control",
         ),
         "dataset_fingerprint": _sha256(manifest_path),
+        "workload_fingerprint": workload["fingerprint"],
         "records_fingerprint": _sha256(records_path),
+        "source_attempt": {
+            "status": provenance["status"],
+            "candidate_id": provenance["candidate_id"],
+            "attempt_id": provenance["attempt_id"],
+            "attempt_key": provenance["attempt_key"],
+            "config_fingerprint": fingerprint_json(provenance["config"]),
+            "config_index": provenance["config_index"],
+            "trial_index": provenance["trial_index"],
+            "code_fingerprint": provenance["code_fingerprint"],
+            "environment_fingerprint": provenance["environment_fingerprint"],
+            "controller_environment_fingerprint": provenance[
+                "controller_environment_fingerprint"
+            ],
+            "execution_policy_fingerprint": provenance[
+                "execution_policy_fingerprint"
+            ],
+        },
         "metrics": metrics,
+    }
+
+
+def _validated_reference(
+    reference: object,
+    *,
+    media_path: Path,
+    duration_seconds: float,
+    expected_speech: bool,
+    reference_character_budget: list[int],
+    alias_character_budget: list[int],
+) -> dict:
+    if not isinstance(reference, dict) or set(reference) != _REFERENCE_FIELDS:
+        raise ValueError("ASR quality reference must use the exact schema")
+    category = reference.get("category")
+    transcript = reference.get("transcript")
+    required_terms = reference["required_terms"]
+    speech_intervals = reference["speech_intervals"]
+    audio_sha256 = reference["audio_sha256"]
+    if (
+        type(audio_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", audio_sha256) is None
+        or _sha256(media_path) != audio_sha256
+    ):
+        raise ValueError("ASR quality reference media hash is invalid")
+    if not isinstance(category, str) or _CATEGORY_ID.fullmatch(category) is None:
+        raise ValueError("ASR quality reference category is invalid")
+    if not isinstance(transcript, str) or len(transcript) > _MAX_REFERENCE_CHARACTERS:
+        raise ValueError("ASR quality reference transcript is invalid")
+    reference_character_budget[0] -= len(transcript)
+    if reference_character_budget[0] < 0:
+        raise ValueError("ASR quality reference transcript budget exceeded")
+    declared_speech = reference["expected_speech"]
+    if type(declared_speech) is not bool or declared_speech is not expected_speech:
+        raise ValueError("ASR quality reference speech expectation is invalid")
+    if not isinstance(required_terms, list) or len(required_terms) > _MAX_REQUIRED_TERMS:
+        raise ValueError("ASR quality required terms are invalid")
+    validated_terms = []
+    for term in required_terms:
+        if not isinstance(term, dict) or set(term) != {"aliases"}:
+            raise ValueError("ASR quality required term is invalid")
+        aliases = term["aliases"]
+        if (
+            not isinstance(aliases, list)
+            or not aliases
+            or len(aliases) > _MAX_ALIASES_PER_TERM
+            or any(
+                not isinstance(alias, str)
+                or not alias
+                or len(alias) > _MAX_ALIAS_CHARACTERS
+                for alias in aliases
+            )
+        ):
+            raise ValueError("ASR quality required-term aliases are invalid")
+        alias_character_budget[0] -= sum(len(alias) for alias in aliases)
+        if alias_character_budget[0] < 0:
+            raise ValueError("ASR quality alias budget exceeded")
+        validated_terms.append({"aliases": list(aliases)})
+    if not isinstance(speech_intervals, list) or len(speech_intervals) > _MAX_SPEECH_INTERVALS:
+        raise ValueError("ASR quality speech intervals are invalid")
+    validated_intervals = []
+    previous_end = 0.0
+    for interval in speech_intervals:
+        if (
+            not isinstance(interval, list)
+            or len(interval) != 2
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                for value in interval
+            )
+        ):
+            raise ValueError("ASR quality speech interval is invalid")
+        start, end = map(float, interval)
+        if not 0 <= start <= end <= duration_seconds or start < previous_end:
+            raise ValueError("ASR quality speech interval is invalid")
+        previous_end = end
+        validated_intervals.append([start, end])
+    return {
+        "category": category,
+        "transcript": transcript,
+        "required_terms": validated_terms,
+        "speech_intervals": validated_intervals,
     }
 
 
 def _read_records(path: Path) -> dict[str, dict]:
     records = {}
+    total_prediction_characters = 0
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"invalid ASR quality record at line {line_number}")
             sample_id = record.get("sample_id")
-            if not isinstance(sample_id, str) or sample_id in records:
-                raise ValueError(f"invalid or duplicate sample ID at line {line_number}")
+            success = record.get("success")
+            prediction = record.get("prediction")
+            if (
+                not isinstance(sample_id, str)
+                or sample_id in records
+                or type(success) is not bool
+                or ("prediction" in record and type(prediction) is not str)
+                or (success and type(prediction) is not str)
+                or (
+                    isinstance(prediction, str)
+                    and len(prediction) > _MAX_PREDICTION_CHARACTERS
+                )
+                or (
+                    "segments" in record
+                    and not isinstance(record.get("segments"), list)
+                )
+                or len(record.get("segments", [])) > 10_000
+            ):
+                raise ValueError(f"invalid ASR quality record at line {line_number}")
+            total_prediction_characters += len(prediction or "")
+            if total_prediction_characters > _MAX_TOTAL_PREDICTION_CHARACTERS:
+                raise ValueError("ASR quality prediction budget exceeded")
             records[sample_id] = record
     return records
+
+
+def _verify_records_provenance(
+    records_path: Path,
+    *,
+    candidate_id: str,
+    workload_fingerprint: str,
+) -> dict:
+    provenance_path = records_path.with_name("records-provenance.json")
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if (
+        provenance.get("schema_version") != 1
+        or provenance.get("protocol") != "sustained-process-v1"
+        or provenance.get("status") not in _SOURCE_STATUSES
+        or provenance.get("candidate_id") != candidate_id
+        or provenance.get("task") != "asr"
+        or provenance.get("phase") != "quality"
+        or provenance.get("workload_class") != "generated_quality_control"
+        or provenance.get("workload_fingerprint") != workload_fingerprint
+        or provenance.get("records_sha256") != _sha256(records_path)
+        or not isinstance(provenance.get("config"), dict)
+    ):
+        raise ValueError("ASR quality records provenance is invalid")
+    try:
+        uuid.UUID(provenance.get("attempt_id", ""))
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ValueError("ASR quality records provenance is invalid") from error
+    for key in (
+        "attempt_key",
+        "code_fingerprint",
+        "environment_fingerprint",
+        "controller_environment_fingerprint",
+        "execution_policy_fingerprint",
+    ):
+        if (
+            type(provenance.get(key)) is not str
+            or re.fullmatch(r"[0-9a-f]{16}", provenance[key]) is None
+        ):
+            raise ValueError("ASR quality records provenance is invalid")
+    for key in ("config_index", "trial_index"):
+        if type(provenance.get(key)) is not int or provenance[key] < 0:
+            raise ValueError("ASR quality records provenance is invalid")
+    return provenance
+
+
+def _validate_source_status(
+    source_status: str,
+    *,
+    expected_ids: set[str],
+    records: dict[str, dict],
+) -> None:
+    successful_sample_count = sum(
+        records.get(sample_id, {}).get("success") is True
+        for sample_id in expected_ids
+    )
+    unavailable_sample_count = len(expected_ids) - successful_sample_count
+    expected_status = (
+        "succeeded"
+        if unavailable_sample_count == 0
+        else "all_failed" if successful_sample_count == 0 else "partial_failure"
+    )
+    if source_status != expected_status:
+        raise ValueError("ASR quality source status does not match records")
+
+
+def _scorer_fingerprint() -> str:
+    module_path = Path(__file__).resolve()
+    return fingerprint_files(
+        [
+            module_path,
+            module_path.with_name("fingerprint.py"),
+            module_path.with_name("load_sustained_workload.py"),
+            module_path.with_name("validate_public_summary.py"),
+        ]
+    )
 
 
 def _score_sample(
@@ -114,6 +374,9 @@ def _score_sample(
     speech_intervals: list,
     segments: object,
     failed: bool,
+    explicit_failed_record: bool,
+    missing_record: bool,
+    edit_budget: list[int],
 ) -> dict:
     prediction = _SENSEVOICE_TAG.sub("", prediction)
     reference_tokens = _mixed_tokens(reference_text)
@@ -133,11 +396,16 @@ def _score_sample(
     score = {
         "category": category,
         "reference_tokens": len(reference_tokens),
-        "token_edit_distance": _levenshtein(reference_tokens, prediction_tokens),
+        "token_edit_distance": _bounded_levenshtein(
+            reference_tokens,
+            prediction_tokens,
+            edit_budget,
+        ),
         "reference_characters": len(reference_characters),
-        "character_edit_distance": _levenshtein(
+        "character_edit_distance": _bounded_levenshtein(
             reference_characters,
             prediction_characters,
+            edit_budget,
         ),
         "required_terms": len(required_terms),
         "term_hits": term_hits,
@@ -150,6 +418,8 @@ def _score_sample(
             prediction_repetition - reference_repetition,
         ),
         "failed": failed,
+        "explicit_failed_record": explicit_failed_record,
+        "missing_record": missing_record,
     }
     score.update(
         _score_timestamps(
@@ -198,9 +468,32 @@ def _aggregate_group(scores: list[dict]) -> dict:
         for score in scores
         if score["timestamp_available"]
     )
+    failure_count = sum(score["failed"] for score in scores)
+    explicit_failed_record_count = sum(
+        score["explicit_failed_record"] for score in scores
+    )
+    missing_record_count = sum(score["missing_record"] for score in scores)
+    successful_sample_count = len(scores) - failure_count
     return {
         "sample_count": len(scores),
-        "failure_count": sum(score["failed"] for score in scores),
+        "failure_count": failure_count,
+        "availability": {
+            "sample_denominator": len(scores),
+            "successful_sample_count": successful_sample_count,
+            "unavailable_sample_count": failure_count,
+            "explicit_failed_record_count": explicit_failed_record_count,
+            "missing_record_count": missing_record_count,
+        },
+        "quality_denominators": {
+            "mixed_token_error_denominator": reference_tokens,
+            "normalized_character_error_denominator": reference_characters,
+            "required_term_recall_denominator": required_terms,
+            "silence_minutes_denominator": silence_minutes,
+            "repetition_sample_denominator": len(scores),
+            "timestamp_availability_sample_denominator": len(scores),
+            "timestamp_recall_seconds_denominator": timestamp_reference_seconds,
+            "timestamp_precision_seconds_denominator": timestamp_predicted_seconds,
+        },
         "mixed_token_error_rate": token_edits / reference_tokens if reference_tokens else 0.0,
         "normalized_character_error_rate": (
             character_edits / reference_characters if reference_characters else 0.0
@@ -282,6 +575,8 @@ def _score_timestamps(
             or isinstance(end, bool)
             or not isinstance(start, (int, float))
             or not isinstance(end, (int, float))
+            or not math.isfinite(float(start))
+            or not math.isfinite(float(end))
             or start < 0
             or end < start
             or end > duration_seconds + 0.1
@@ -313,6 +608,7 @@ def _normalize_intervals(intervals: object, duration_seconds: float) -> list[lis
             or len(interval) != 2
             or not all(
                 not isinstance(value, bool) and isinstance(value, (int, float))
+                and math.isfinite(float(value))
                 for value in interval
             )
         ):
@@ -398,6 +694,16 @@ def _levenshtein(left, right) -> int:
             )
         previous = current
     return previous[-1]
+
+
+def _bounded_levenshtein(left, right, edit_budget: list[int]) -> int:
+    if left == right or not left or not right:
+        return _levenshtein(left, right)
+    cells = len(left) * len(right)
+    if cells > edit_budget[0]:
+        raise ValueError("ASR quality edit-distance budget exceeded")
+    edit_budget[0] -= cells
+    return _levenshtein(left, right)
 
 
 def _sha256(path: Path) -> str:

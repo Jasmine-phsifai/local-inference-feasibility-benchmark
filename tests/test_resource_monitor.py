@@ -1,6 +1,9 @@
 import subprocess
 import sys
 import time
+import os
+
+import psutil
 
 from local_inference_bench.resource_monitor import (
     ProcessTreeMonitor,
@@ -25,6 +28,42 @@ def test_monitor_captures_cpu_and_memory(tmp_path):
     assert summary["p95_cpu_percent_of_host"] > 0
     assert summary["minimum_available_memory_bytes"] > 0
     assert sample_path.read_text(encoding="utf-8").count("\n") >= 2
+
+
+def test_monitor_surfaces_sample_file_failure(tmp_path):
+    sample_path = tmp_path / "samples"
+    sample_path.mkdir()
+    monitor = ProcessTreeMonitor(
+        os.getpid(),
+        interval_seconds=0.01,
+        sample_path=sample_path,
+    )
+
+    monitor.start()
+    for _ in range(100):
+        if monitor.monitor_error is not None:
+            break
+        time.sleep(0.01)
+    monitor.stop()
+
+    assert monitor.monitor_error in {"IsADirectoryError", "PermissionError"}
+
+
+def test_monitor_surfaces_access_denied(monkeypatch):
+    monitor = ProcessTreeMonitor(os.getpid(), interval_seconds=0.01)
+
+    def deny_process(_pid):
+        raise psutil.AccessDenied(pid=os.getpid())
+
+    monkeypatch.setattr(
+        "local_inference_bench.resource_monitor.psutil.Process",
+        deny_process,
+    )
+
+    monitor.start()
+    monitor.stop()
+
+    assert monitor.monitor_error == "AccessDenied"
 
 
 def test_midrun_rss_stability_excludes_startup_and_teardown():

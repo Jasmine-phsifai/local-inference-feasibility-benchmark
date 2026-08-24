@@ -5,6 +5,15 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $registry = Get-Content -LiteralPath (Join-Path $projectRoot 'registries\candidates.json') -Raw | ConvertFrom-Json
 $candidate = $registry.candidates | Where-Object id -eq $CandidateId | Select-Object -First 1
 if (-not $candidate) { throw "Unknown candidate: $CandidateId" }
+if ($candidate.setup_script) {
+  $setupScript = Join-Path $projectRoot $candidate.setup_script
+  if (-not (Test-Path -LiteralPath $setupScript -PathType Leaf)) {
+    throw "Candidate setup script is missing: $setupScript"
+  }
+  & $setupScript
+  if ($LASTEXITCODE -ne 0) { throw "Candidate setup failed: $setupScript" }
+  return
+}
 if (-not $candidate.manifest) { throw "Candidate $CandidateId has no Python environment manifest." }
 $manifest = Join-Path $projectRoot $candidate.manifest
 if (-not (Test-Path -LiteralPath $manifest)) { throw "No manifest for $CandidateId at $manifest" }

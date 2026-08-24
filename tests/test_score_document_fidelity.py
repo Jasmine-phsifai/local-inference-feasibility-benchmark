@@ -1,8 +1,11 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+import local_inference_bench.score_document_fidelity as scorer_module
+from local_inference_bench.fingerprint import fingerprint_files
 from local_inference_bench.score_document_fidelity import score_document_fidelity
 from local_inference_bench.load_sustained_workload import load_sustained_workload
 from scripts.generate_document_fidelity_controls import (
@@ -59,6 +62,8 @@ def _manifest_and_trials(tmp_path, mutations=()):
             "workload_fingerprint": workload_fingerprint,
             "code_fingerprint": "a" * 16,
             "environment_fingerprint": "b" * 16,
+            "controller_environment_fingerprint": "c" * 16,
+            "execution_policy_fingerprint": "d" * 16,
             "records_sha256": hashlib.sha256(records_path.read_bytes()).hexdigest(),
         }
         records_path.with_name("records-provenance.json").write_text(
@@ -94,6 +99,32 @@ def test_exact_raw_markdown_passes_every_gate_and_event_is_aggregate_only(tmp_pa
     assert metrics["exact_document_fraction"] == 1.0
     assert metrics["repeat_exact_fraction"] == 1.0
     assert metrics["markdown_character_error_rate"] == 0.0
+    assert event["scorer_protocol"] == "document-fidelity-v2"
+    module_path = Path(scorer_module.__file__).resolve()
+    assert event["scorer_fingerprint"] == fingerprint_files(
+        [
+            module_path,
+            module_path.with_name("fingerprint.py"),
+            module_path.with_name("load_sustained_workload.py"),
+            module_path.with_name("score_ocr_quality.py"),
+            module_path.with_name("validate_public_summary.py"),
+        ]
+    )
+    assert event["source_attempts"] == [
+        {
+            "status": "succeeded",
+            "attempt_id": f"00000000-0000-0000-0000-{trial + 1:012d}",
+            "attempt_key": f"{trial + 1:016x}",
+            "config_fingerprint": event["config_fingerprint"],
+            "config_index": 2,
+            "trial_index": trial,
+            "code_fingerprint": "a" * 16,
+            "environment_fingerprint": "b" * 16,
+            "controller_environment_fingerprint": "c" * 16,
+            "execution_policy_fingerprint": "d" * 16,
+        }
+        for trial in range(2)
+    ]
 
     serialized = json.dumps(event, ensure_ascii=False)
     for sample_id, reference in manifest["references"].items():
@@ -249,9 +280,18 @@ def test_failed_record_without_prediction_is_counted_not_reconstructed(tmp_path)
     )
     _refresh_records_hash(records_paths[0])
 
-    metrics = _score(manifest_path, records_paths)["metrics"]
+    with pytest.raises(ValueError, match="source status does not match records"):
+        _score(manifest_path, records_paths)
+
+    provenance_path = records_paths[0].with_name("records-provenance.json")
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["status"] = "partial_failure"
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    event = _score(manifest_path, records_paths)
+    metrics = event["metrics"]
     assert metrics["failure_count"] == 1
     assert metrics["semantic_gate_pass"] is False
+    assert event["source_attempts"][0]["status"] == "partial_failure"
 
 
 def test_indented_table_case_variant_invention_and_outer_fence_fail(tmp_path):
@@ -293,4 +333,141 @@ def test_repeatability_rejects_mixed_code_or_environment_provenance(tmp_path):
     provenance["environment_fingerprint"] = "d" * 16
     second_path.write_text(json.dumps(provenance), encoding="utf-8")
     with pytest.raises(ValueError, match="environment fingerprint"):
+        _score(manifest_path, records_paths)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("config_index", 3, "config index"),
+        ("controller_environment_fingerprint", "e" * 16, "controller environment"),
+        ("execution_policy_fingerprint", "f" * 16, "execution policy"),
+    ],
+)
+def test_repeatability_binds_config_controller_and_execution_provenance(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    manifest_path, _, records_paths = _manifest_and_trials(tmp_path)
+    second_path = records_paths[1].with_name("records-provenance.json")
+    provenance = json.loads(second_path.read_text(encoding="utf-8"))
+    provenance[field] = value
+    second_path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        _score(manifest_path, records_paths)
+
+
+def test_required_controller_and_execution_fingerprints_reject_missing_or_bad_shape(
+    tmp_path,
+):
+    manifest_path, _, records_paths = _manifest_and_trials(tmp_path)
+    provenance_path = records_paths[0].with_name("records-provenance.json")
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance.pop("controller_environment_fingerprint")
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    with pytest.raises(ValueError, match="controller_environment_fingerprint"):
+        _score(manifest_path, records_paths)
+
+    provenance["controller_environment_fingerprint"] = "c" * 16
+    provenance["execution_policy_fingerprint"] = "D" * 16
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    with pytest.raises(ValueError, match="execution_policy_fingerprint"):
+        _score(manifest_path, records_paths)
+
+
+def test_file_trial_and_record_count_limits_are_enforced(tmp_path, monkeypatch):
+    manifest_path, _, records_paths = _manifest_and_trials(tmp_path)
+
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_MANIFEST_BYTES",
+        manifest_path.stat().st_size - 1,
+    )
+    with pytest.raises(ValueError, match="manifest file budget"):
+        _score(manifest_path, records_paths)
+    monkeypatch.setattr(scorer_module, "_MAX_MANIFEST_BYTES", 1_000_000)
+
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_RECORD_FILE_BYTES",
+        records_paths[0].stat().st_size - 1,
+    )
+    with pytest.raises(ValueError, match="record file budget"):
+        _score(manifest_path, records_paths)
+    monkeypatch.setattr(scorer_module, "_MAX_RECORD_FILE_BYTES", 2_000_000)
+
+    monkeypatch.setattr(scorer_module, "_MAX_TRIAL_COUNT", 1)
+    with pytest.raises(ValueError, match="one to 1 trials"):
+        _score(manifest_path, records_paths)
+    monkeypatch.setattr(scorer_module, "_MAX_TRIAL_COUNT", 8)
+
+    monkeypatch.setattr(scorer_module, "_MAX_RECORDS_PER_TRIAL", 2)
+    with pytest.raises(ValueError, match="record count limit"):
+        _score(manifest_path, records_paths)
+
+
+def test_prediction_and_reference_character_limits_are_enforced(tmp_path, monkeypatch):
+    manifest_path, manifest, records_paths = _manifest_and_trials(tmp_path)
+    first_prediction_length = len(
+        json.loads(records_paths[0].read_text(encoding="utf-8").splitlines()[0])[
+            "prediction"
+        ]
+    )
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_PREDICTION_CHARACTERS",
+        first_prediction_length - 1,
+    )
+    with pytest.raises(ValueError, match="prediction length limit"):
+        _score(manifest_path, records_paths)
+    monkeypatch.setattr(scorer_module, "_MAX_PREDICTION_CHARACTERS", 200_000)
+
+    first_trial_characters = sum(
+        len(json.loads(line)["prediction"])
+        for line in records_paths[0].read_text(encoding="utf-8").splitlines()
+    )
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_TOTAL_PREDICTION_CHARACTERS",
+        first_trial_characters,
+    )
+    with pytest.raises(ValueError, match="prediction budget"):
+        _score(manifest_path, records_paths)
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_TOTAL_PREDICTION_CHARACTERS",
+        1_000_000,
+    )
+
+    reference_characters = sum(
+        len(reference["expected_markdown"])
+        for reference in manifest["references"].values()
+    )
+    monkeypatch.setattr(
+        scorer_module,
+        "_MAX_REFERENCE_CHARACTERS",
+        reference_characters - 1,
+    )
+    with pytest.raises(ValueError, match="reference budget"):
+        _score(manifest_path, records_paths)
+
+
+def test_edit_distance_work_is_bounded(tmp_path, monkeypatch):
+    manifest_path, _, records_paths = _manifest_and_trials(tmp_path)
+    records = [
+        json.loads(line)
+        for line in records_paths[0].read_text(encoding="utf-8").splitlines()
+    ]
+    records[0]["prediction"] += "x"
+    records_paths[0].write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    _refresh_records_hash(records_paths[0])
+    monkeypatch.setattr(scorer_module, "_MAX_TOTAL_EDIT_CELLS", 1)
+
+    with pytest.raises(ValueError, match="edit-distance budget"):
         _score(manifest_path, records_paths)

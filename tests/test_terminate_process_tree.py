@@ -1,10 +1,16 @@
 import subprocess
 import sys
 import time
+import importlib
 
 import psutil
 
 from local_inference_bench.terminate_process_tree import terminate_process_tree
+
+
+terminate_process_tree_module = importlib.import_module(
+    "local_inference_bench.terminate_process_tree"
+)
 
 
 def test_terminates_owned_root_and_child():
@@ -29,3 +35,26 @@ def test_terminates_owned_root_and_child():
     assert result["found"] >= 2
     assert not psutil.pid_exists(root.pid)
     assert not psutil.pid_exists(child_pid)
+
+
+def test_process_lookup_access_denied_is_reported_as_unverified(monkeypatch):
+    def deny_process(_pid):
+        raise psutil.AccessDenied(pid=1234)
+
+    monkeypatch.setattr(terminate_process_tree_module.psutil, "Process", deny_process)
+
+    result = terminate_process_tree(1234, grace_seconds=0)
+
+    assert result["surviving"] == 1
+    assert result["error_count"] == 1
+
+
+def test_running_process_probe_access_denied_remains_a_survivor():
+    class UnverifiableProcess:
+        @staticmethod
+        def is_running():
+            raise psutil.AccessDenied(pid=1234)
+
+    process = UnverifiableProcess()
+
+    assert terminate_process_tree_module._running_processes([process]) == [process]

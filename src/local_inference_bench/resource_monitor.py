@@ -18,6 +18,7 @@ class ProcessTreeMonitor:
         self.interval_seconds = interval_seconds
         self.sample_path = sample_path
         self.samples: list[dict] = []
+        self.monitor_error: str | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sample_until_stopped, daemon=True)
         self._previous_cpu_by_pid: dict[int, float] = {}
@@ -30,6 +31,8 @@ class ProcessTreeMonitor:
     def stop(self) -> dict:
         self._stop.set()
         self._thread.join(timeout=2)
+        if self._thread.is_alive() and self.monitor_error is None:
+            self.monitor_error = "stop_timeout"
         return self.summary()
 
     def _sample_until_stopped(self) -> None:
@@ -45,8 +48,11 @@ class ProcessTreeMonitor:
                         cpu_times = process.cpu_times()
                         cpu_by_pid[process.pid] = cpu_times.user + cpu_times.system
                         threads += process.num_threads()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    except psutil.NoSuchProcess:
                         continue
+                    except psutil.AccessDenied:
+                        self.monitor_error = "AccessDenied"
+                        return
                 sample_time = time.monotonic()
                 cpu_percent = 0.0
                 if self._previous_sample_time is not None:
@@ -78,8 +84,14 @@ class ProcessTreeMonitor:
                     with self.sample_path.open("a", encoding="utf-8", newline="\n") as handle:
                         handle.write(json.dumps(sample, sort_keys=True) + "\n")
                         handle.flush()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except psutil.NoSuchProcess:
                 pass
+            except psutil.AccessDenied:
+                self.monitor_error = "AccessDenied"
+                return
+            except Exception as error:
+                self.monitor_error = type(error).__name__
+                return
             self._stop.wait(self.interval_seconds)
 
     def summary(self) -> dict:

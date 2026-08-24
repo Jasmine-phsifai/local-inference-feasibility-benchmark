@@ -12,12 +12,22 @@ _SAMPLE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _OUTPUT_MARKER = re.compile(
     r"^<!-- meta:(?:page number=[1-9][0-9]*|frame id=[a-z0-9][a-z0-9_-]{0,63}) -->$"
 )
-_WORKLOAD_CLASSES = {
-    "generated_control",
-    "generated_quality_control",
-    "public_course",
-    "private_course",
-}
+_WORKLOAD_FINGERPRINT_PROTOCOL = "sustained-workload-v3"
+PUBLIC_WORKLOAD_CLASSES = frozenset(
+    {
+        "generated_control",
+        "generated_quality_control",
+        "public_course",
+    }
+)
+PRIVATE_WORKLOAD_CLASSES = frozenset({"private_course"})
+_WORKLOAD_CLASSES = PUBLIC_WORKLOAD_CLASSES | PRIVATE_WORKLOAD_CLASSES
+
+
+def is_private_workload_class(workload_class: object) -> bool:
+    """Treat every workload class not explicitly public as private."""
+
+    return workload_class not in PUBLIC_WORKLOAD_CLASSES
 
 
 def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
@@ -68,7 +78,12 @@ def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
         "workload_class": workload_class,
         "items": items,
         "warmup_item": warmup_item,
-        "fingerprint": _fingerprint_items(fingerprint_items, expected_task),
+        "fingerprint": _fingerprint_items(
+            fingerprint_items,
+            task=expected_task,
+            workload_class=workload_class,
+            warmup_item_id=warmup_item["id"],
+        ),
         "public_summary": {
             "workload_class": workload_class,
             "item_count": len(items),
@@ -132,20 +147,59 @@ def _load_item(
     return item
 
 
-def _fingerprint_items(items: list[dict], task: str) -> str:
-    digest = hashlib.sha256()
-    digest.update(task.encode("ascii"))
+def _fingerprint_items(
+    items: list[dict],
+    *,
+    task: str,
+    workload_class: str,
+    warmup_item_id: str,
+) -> str:
+    fingerprint_identity = {
+        "protocol": _WORKLOAD_FINGERPRINT_PROTOCOL,
+        "task": task,
+        "warmup_item_id": warmup_item_id,
+        "workload_class": workload_class,
+        # Item order is part of the execution contract because it affects
+        # process assignment and therefore the measured concurrency pattern.
+        "items": [],
+    }
     for item in items:
         path = Path(item["path"])
-        digest.update(item["id"].encode("ascii"))
-        digest.update(str(path.stat().st_size).encode("ascii"))
+        size_bytes, content_sha256 = _hash_file(path)
+        fingerprint_item = {
+            "content_sha256": content_sha256,
+            "id": item["id"],
+            "size_bytes": size_bytes,
+        }
         if task == "asr":
-            digest.update(repr(item["duration_seconds"]).encode("ascii"))
-            digest.update(str(item["expected_speech"]).encode("ascii"))
+            fingerprint_item.update(
+                {
+                    "duration_seconds": item["duration_seconds"],
+                    "expected_speech": item["expected_speech"],
+                }
+            )
         else:
-            digest.update(str(item["expected_text"]).encode("ascii"))
-            digest.update(item.get("output_marker", "").encode("ascii"))
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                digest.update(chunk)
-    return digest.hexdigest()
+            fingerprint_item.update(
+                {
+                    "expected_text": item["expected_text"],
+                    "output_marker": item.get("output_marker"),
+                }
+            )
+        fingerprint_identity["items"].append(fingerprint_item)
+    canonical = json.dumps(
+        fingerprint_identity,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _hash_file(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            size_bytes += len(chunk)
+            digest.update(chunk)
+    return size_bytes, digest.hexdigest()

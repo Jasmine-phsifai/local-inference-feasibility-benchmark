@@ -1,0 +1,5 @@
+name: local-bench-sensevoice-official-runtime
+channels:
+  - defaults
+dependencies:
+  - vs2015_runtime=14.42.34433=hbfb602d_5

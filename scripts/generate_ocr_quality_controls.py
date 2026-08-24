@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -63,8 +64,10 @@ def main() -> None:
         "items": items,
         "references": references,
         "generator": {
+            "protocol": "rendered-ocr-controls.v1",
             "canvas_width": 1920,
             "canvas_height": 1080,
+            "pillow_version": version("pillow"),
             "font_files": {
                 name: _sha256(FONT_ROOT / name)
                 for name in ("msyh.ttc", "consola.ttf", "Inkfree.ttf")
@@ -72,8 +75,9 @@ def main() -> None:
         },
     }
     MANIFEST_PATH.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(MANIFEST_PATH)
 

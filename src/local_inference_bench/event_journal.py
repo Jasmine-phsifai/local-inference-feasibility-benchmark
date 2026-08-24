@@ -8,6 +8,7 @@ from pathlib import Path
 def append_event(path: Path, event: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     recovery = _repair_incomplete_final_record(path)
+    read_events(path)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         if recovery is not None:
             handle.write(json.dumps(recovery, ensure_ascii=False, sort_keys=True) + "\n")
@@ -36,6 +37,7 @@ def _repair_incomplete_final_record(path: Path) -> dict | None:
         retained = contents[:fragment_start]
         discarded = fragment
         reason = "invalid_final_fragment"
+    _decode_events(retained)
     with path.open("r+b") as handle:
         handle.seek(0)
         handle.write(retained)
@@ -54,13 +56,18 @@ def _repair_incomplete_final_record(path: Path) -> dict | None:
 def read_events(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    lines = path.read_text(encoding="utf-8").splitlines()
+    return _decode_events(path.read_bytes())
+
+
+def _decode_events(contents: bytes) -> list[dict]:
+    lines = contents.splitlines()
+    has_final_newline = contents.endswith(b"\n")
     events = []
     for index, line in enumerate(lines):
         try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            if index != len(lines) - 1:
+            events.append(json.loads(line.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if index != len(lines) - 1 or has_final_newline:
                 raise
     return events
 

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "task": "ocr",
+  "workload_class": "generated_quality_control",
+  "disclosure": "Deterministic rendered compatibility controls test source-faithful Markdown behavior; they do not substitute for photographed lectures.",
+  "warmup_item_id": "page_008_table_columns",
+  "items": [
+    {
+      "id": "page_008_table_columns",
+      "path": "page_008_table_columns.png",
+      "expected_text": true,
+      "output_marker": "<!-- meta:page number=8 -->"
+    }
+  ],
+  "references": {
+    "page_008_table_columns": {
+      "marker": "<!-- meta:page number=8 -->",
+      "page_number": 8,
+      "expected_markdown": "<!-- meta:page number=8 -->\n## Runtime comparison\n\n| ID | Device | Error |\n| --- | --- | --- |\n| A-01 | CPU | 0.031 |\n| A-02 | iGPU | 0.027 |\n\n### Notes\n\n1. Read the left table before the right notes.\n2. Preserve A-01 and A-02 exactly.\n3. The shapes below are unlabeled.",
+      "headings": [
+        "## Runtime comparison",
+        "### Notes"
+      ],
+      "formulas": [],
+      "code_blocks": [],
+      "tables": [
+        {
+          "rows": [
+            ["ID", "Device", "Error"],
+            ["---", "---", "---"],
+            ["A-01", "CPU", "0.031"],
+            ["A-02", "iGPU", "0.027"]
+          ]
+        }
+      ],
+      "ordered_anchors": [
+        "Runtime comparison",
+        "A-01",
+        "A-02",
+        "Notes",
+        "left table",
+        "shapes below"
+      ],
+      "protected_spans": [
+        "A-01",
+        "A-02",
+        "CPU",
+        "iGPU",
+        "0.031",
+        "0.027"
+      ],
+      "forbidden_spans": [
+        "Start",
+        "End",
+        "Process"
+      ],
+      "image_sha256": "ed156fa35692cd618bc236829588e38ecf03869f84d56691c09f704a59feaef6"
+    }
+  },
+  "subset": {
+    "source": "deterministic_document_fidelity_controls",
+    "sample_count": 1
+  },
+  "generator": {
+    "protocol": "source-faithful.v1",
+    "canvas_width": 1920,
+    "canvas_height": 1080,
+    "pillow_version": "12.3.0",
+    "font_files": {
+      "msyh.ttc": "d79c55e68b1131eea0cc1c47be4f572d964f28c682e143db2ad09c1e4cb07a3f",
+      "consola.ttf": "cf00b507b3286870cc5064ebd0633c303f70b491a4af25eec2d32df413db0179",
+      "cambria.ttc": "84e70ccc1664482f4a960442c7a166c91a1b2cf98ff88c33cb73f79403f66d7b"
+    }
+  }
+}

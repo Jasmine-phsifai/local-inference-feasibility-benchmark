@@ -1,26 +1,19 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$sourceEnvironment = 'local-bench-rapidocr'
 $targetEnvironment = 'local-bench-rapidocr-openvino'
-$sourcePython = "D:\Anaconda\envs\$sourceEnvironment\python.exe"
 $targetPython = "D:\Anaconda\envs\$targetEnvironment\python.exe"
 $conda = 'D:\Anaconda\Scripts\conda.exe'
-$manifest = Join-Path $projectRoot 'environments\rapidocr_openvino\requirements.txt'
+$manifest = Join-Path $projectRoot 'environments\rapidocr_openvino\requirements.lock.txt'
 
 if (-not (Test-Path -LiteralPath $targetPython)) {
-    if (Test-Path -LiteralPath $sourcePython) {
-        & $conda create --name $targetEnvironment --clone $sourceEnvironment --yes
-    }
-    else {
-        & $conda create --name $targetEnvironment --yes python=3.11 pip
-    }
+    & $conda create --name $targetEnvironment --yes python=3.11.15 pip=26.1.2
     if ($LASTEXITCODE -ne 0) {
         throw 'Failed to create the isolated RapidOCR OpenVINO environment.'
     }
 }
 
-& $targetPython -m pip install --timeout 120 --retries 8 --upgrade-strategy only-if-needed --requirement $manifest
+& $targetPython -m pip install --timeout 120 --retries 8 --requirement $manifest
 if ($LASTEXITCODE -ne 0) {
     throw 'Failed to install the pinned RapidOCR OpenVINO stack.'
 }

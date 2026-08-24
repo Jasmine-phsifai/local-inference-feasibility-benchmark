@@ -11,6 +11,48 @@
       "environment": "local-bench-control",
       "environment_manifest": "environments/control/environment.yml",
       "worker": "workers/sensevoice_sustained_worker.py",
+      "verify_script": "scripts/verify_sensevoice_thread_runtime.py",
+      "setup_script": "scripts/prepare_sensevoice_sustained_assets.ps1",
+      "fingerprint_files": [
+        "environments/sensevoice_build/environment.yml",
+        "environments/sensevoice_official_runtime/environment.yml",
+        "scripts/download_sensevoice_assets.ps1",
+        "scripts/create_sensevoice_build_environment.ps1",
+        "scripts/create_sensevoice_official_runtime_environment.ps1",
+        "scripts/build_sensevoice_thread_runtime.ps1",
+        "scripts/prepare_sensevoice_sustained_assets.ps1",
+        "scripts/verify_sensevoice_thread_runtime.py",
+        "patches/sensevoice-runtime-v0.1.9-thread-option.patch",
+        "patches/sensevoice-runtime-v0.2.0-thread-option.patch"
+      ],
+      "artifact_files": [
+        "data/models/sensevoice/sensevoice-small-q8.gguf",
+        "data/models/sensevoice/fsmn-vad.gguf"
+      ],
+      "artifact_groups": {
+        "official_fixed8": [
+          "data/models/sensevoice/llama-funasr-sensevoice.exe",
+          "data/models/sensevoice/vcomp140.dll"
+        ],
+        "source_thread_control_v019": [
+          "data/models/sensevoice-runtime-v0.1.9-thread-build/build-pinned/bin/llama-funasr-sensevoice.exe",
+          "data/models/sensevoice-runtime-v0.1.9-thread-build/build-pinned/bin/libc++.dll",
+          "data/models/sensevoice-runtime-v0.1.9-thread-build/build-pinned/bin/libomp.dll",
+          "data/models/sensevoice-runtime-v0.1.9-thread-build/build-pinned/bin/libunwind.dll"
+        ],
+        "source_thread_control_v020": [
+          "data/models/sensevoice-runtime-v0.2.0-thread-build/build-pinned/bin/llama-funasr-sensevoice.exe",
+          "data/models/sensevoice-runtime-v0.2.0-thread-build/build-pinned/bin/libc++.dll",
+          "data/models/sensevoice-runtime-v0.2.0-thread-build/build-pinned/bin/libomp.dll",
+          "data/models/sensevoice-runtime-v0.2.0-thread-build/build-pinned/bin/libunwind.dll"
+        ]
+      },
+      "artifact_group_by_runtime_variant": {
+        "source_thread_control": "source_thread_control_v019",
+        "source_thread_control_v020": "source_thread_control_v020"
+      },
+      "default_artifact_group": "official_fixed8",
+      "retired_config_indices": [15],
       "configs": [
         {"processes": 1, "effective_threads_per_process": 8},
         {"processes": 2, "effective_threads_per_process": 8},
@@ -18,15 +60,34 @@
         {"processes": 4, "effective_threads_per_process": 8},
         {"processes": 5, "effective_threads_per_process": 8},
         {"processes": 6, "effective_threads_per_process": 8},
-        {"processes": 8, "effective_threads_per_process": 8}
+        {"processes": 8, "effective_threads_per_process": 8},
+        {"processes": 1, "effective_threads_per_process": 8, "runtime_variant": "source_thread_control"},
+        {"processes": 2, "effective_threads_per_process": 12, "runtime_variant": "source_thread_control"},
+        {"processes": 3, "effective_threads_per_process": 8, "runtime_variant": "source_thread_control"},
+        {"processes": 4, "effective_threads_per_process": 6, "runtime_variant": "source_thread_control"},
+        {"processes": 6, "effective_threads_per_process": 4, "runtime_variant": "source_thread_control"},
+        {"processes": 8, "effective_threads_per_process": 3, "runtime_variant": "source_thread_control"},
+        {"processes": 1, "effective_threads_per_process": 8, "runtime_variant": "source_thread_control_v020", "artifact_group": "source_thread_control_v020"},
+        {"processes": 8, "effective_threads_per_process": 3, "runtime_variant": "source_thread_control_v020", "artifact_group": "source_thread_control_v020"},
+        {"artifact_group": "source_thread_control_v019", "effective_threads_per_process": 8, "processes": 1, "runtime_variant": "source_thread_control"}
       ]
     },
     {
       "id": "faster_whisper_cpu",
       "task": "asr",
       "environment": "local-bench-faster-whisper",
-      "environment_manifest": "environments/faster_whisper_cpu/requirements.txt",
+      "environment_manifest": "environments/faster_whisper_cpu/requirements.lock.txt",
+      "verify_script": "scripts/verify_faster_whisper_environment.py",
+      "setup_script": "scripts/create_faster_whisper_environment.ps1",
       "worker": "workers/faster_whisper_sustained_worker.py",
+      "fingerprint_files": [
+        "environments/faster_whisper_cpu/requirements.txt",
+        "registries/faster_whisper_small_assets.json",
+        "scripts/create_faster_whisper_environment.ps1",
+        "scripts/download_faster_whisper_assets.py",
+        "src/local_inference_bench/verify_asset_inventory.py",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
       "configs": [
         {"processes": 1, "model_workers": 1, "threads_per_worker": 16},
         {"processes": 1, "model_workers": 2, "threads_per_worker": 8},
@@ -46,16 +107,27 @@
         {"processes": 1, "model_workers": 24, "threads_per_worker": 1},
         {"processes": 3, "model_workers": 1, "threads_per_worker": 8},
         {"processes": 6, "model_workers": 1, "threads_per_worker": 4},
-        {"processes": 12, "model_workers": 1, "threads_per_worker": 2}
+        {"processes": 12, "model_workers": 1, "threads_per_worker": 2},
+        {"processes": 1, "model_workers": 10, "threads_per_worker": 2},
+        {"processes": 1, "model_workers": 10, "threads_per_worker": 1},
+        {"processes": 1, "model_workers": 10, "threads_per_worker": 2, "language": "zh"},
+        {"processes": 1, "model_workers": 1, "threads_per_worker": 16, "language": "zh"}
       ]
     },
     {
       "id": "rapidocr_cpu",
       "task": "ocr",
       "environment": "local-bench-rapidocr-openvino",
-      "environment_manifest": "environments/rapidocr_openvino/requirements.txt",
+      "environment_manifest": "environments/rapidocr_openvino/requirements.lock.txt",
       "verify_script": "scripts/verify_rapidocr_openvino_environment.py",
+      "setup_script": "scripts/create_rapidocr_openvino_environment.ps1",
       "worker": "workers/rapidocr_sustained_worker.py",
+      "retired_config_indices": [10],
+      "fingerprint_files": [
+        "environments/rapidocr_openvino/requirements.txt",
+        "scripts/create_rapidocr_openvino_environment.ps1",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
       "configs": [
         {"processes": 1, "threads_per_process": 1},
         {"processes": 1, "threads_per_process": 2},
@@ -73,15 +145,26 @@
         {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1536},
         {"processes": 8, "threads_per_process": 2, "use_cls": false, "max_side_len": 1280},
         {"processes": 8, "threads_per_process": 2, "backend": "onnxruntime", "use_cls": true, "max_side_len": 2000},
-        {"processes": 8, "threads_per_process": 2, "backend": "openvino", "use_cls": true, "max_side_len": 2000}
+        {"processes": 8, "threads_per_process": 2, "backend": "openvino", "use_cls": true, "max_side_len": 2000},
+        {"processes": 8, "threads_per_process": 2, "opencv_threads": 1}
       ]
     },
     {
       "id": "ppocrv6_tiny_cpu",
       "task": "ocr",
       "environment": "local-bench-paddleocr",
-      "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
+      "environment_manifest": "environments/paddleocr_cpu/requirements.lock.txt",
+      "verify_script": "scripts/verify_paddleocr_environment.py",
+      "setup_script": "scripts/create_paddleocr_environment.ps1",
       "worker": "workers/paddleocr_sustained_worker.py",
+      "fingerprint_files": [
+        "environments/paddleocr_cpu/requirements.txt",
+        "registries/ppocrv6_cached_assets.json",
+        "scripts/create_paddleocr_environment.ps1",
+        "scripts/download_paddleocr_assets.py",
+        "src/local_inference_bench/verify_asset_inventory.py",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
       "configs": [
         {"processes": 1, "threads_per_process": 4},
         {"processes": 1, "threads_per_process": 8},
@@ -94,15 +177,28 @@
         {"processes": 8, "threads_per_process": 2},
         {"processes": 5, "threads_per_process": 4},
         {"processes": 6, "threads_per_process": 3},
-        {"processes": 8, "threads_per_process": 3}
+        {"processes": 8, "threads_per_process": 3},
+        {"processes": 6, "threads_per_process": 4, "kmp_blocktime_ms": 0},
+        {"processes": 6, "threads_per_process": 4, "opencv_threads": 1},
+        {"processes": 6, "threads_per_process": 4, "opencv_threads": 1, "kmp_blocktime_ms": 0}
       ]
     },
     {
       "id": "ppocrv6_medium_cpu",
       "task": "ocr",
       "environment": "local-bench-paddleocr",
-      "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
+      "environment_manifest": "environments/paddleocr_cpu/requirements.lock.txt",
+      "verify_script": "scripts/verify_paddleocr_environment.py",
+      "setup_script": "scripts/create_paddleocr_environment.ps1",
       "worker": "workers/paddleocr_sustained_worker.py",
+      "fingerprint_files": [
+        "environments/paddleocr_cpu/requirements.txt",
+        "registries/ppocrv6_cached_assets.json",
+        "scripts/create_paddleocr_environment.ps1",
+        "scripts/download_paddleocr_assets.py",
+        "src/local_inference_bench/verify_asset_inventory.py",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
       "configs": [
         {"processes": 1, "threads_per_process": 4, "model_tier": "medium"},
         {"processes": 1, "threads_per_process": 8, "model_tier": "medium"},
@@ -114,9 +210,11 @@
     {
       "id": "paddleocr_vl_1_6_cpu",
       "task": "ocr",
+      "status": "retired_historical_unverified_artifact_inventory",
       "environment": "local-bench-paddleocr",
       "environment_manifest": "environments/paddleocr_cpu/requirements.txt",
       "worker": "workers/paddleocr_vl_structured_worker.py",
+      "allowed_phases": ["quality", "compatibility"],
       "configs": [
         {"processes": 1, "threads_per_process": 16, "max_new_tokens": 512},
         {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512},
@@ -126,6 +224,7 @@
     {
       "id": "hunyuanocr_1_5_gguf_cpu",
       "task": "ocr",
+      "status": "retired_unverified_legacy_runtime",
       "environment": "local-bench-control",
       "environment_manifest": "environments/control/environment.yml",
       "worker": "workers/hunyuanocr_1_5_server_worker.py",
@@ -139,6 +238,7 @@
     {
       "id": "hunyuanocr_1_5_native_cpu",
       "task": "ocr",
+      "status": "retired_bounded_quality_blocker",
       "environment": "local-bench-hunyuanocr-native",
       "environment_manifest": "environments/hunyuanocr_native/requirements.txt",
       "verify_script": "scripts/verify_hunyuanocr_native_environment.py",
@@ -149,12 +249,14 @@
       "configs": [
         {"processes": 1, "threads_per_process": 24, "max_new_tokens": 256, "max_side_len": 960, "max_pixels": 522240, "max_vision_patches": 2040, "max_items": 1, "mode": "doc_parse", "phases": ["compatibility"], "require_all_success": true},
         {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512, "max_side_len": 1920, "max_pixels": 2088960, "max_vision_patches": 8160, "max_items": 3, "mode": "doc_parse", "phases": ["quality"]},
-        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512, "max_side_len": 1920, "max_pixels": 2088960, "max_vision_patches": 8160, "max_items": 3, "mode": "source_faithful", "phases": ["quality"]}
+        {"processes": 1, "threads_per_process": 24, "max_new_tokens": 512, "max_side_len": 1920, "max_pixels": 2088960, "max_vision_patches": 8160, "max_items": 3, "mode": "source_faithful", "phases": ["quality"]},
+        {"max_items": 1, "max_new_tokens": 64, "max_pixels": 522240, "max_side_len": 960, "max_vision_patches": 2040, "mode": "doc_parse", "phases": ["compatibility"], "processes": 1, "require_all_success": true, "threads_per_process": 24}
       ]
     },
     {
       "id": "qwen3_asr_0_6b_cpu",
       "task": "asr",
+      "status": "retired_legacy_hf_runtime",
       "environment": "local-bench-qwen3-asr",
       "environment_manifest": "environments/qwen3_asr_cpu/requirements.txt",
       "worker": "workers/qwen3_asr_sustained_worker.py",
@@ -166,6 +268,7 @@
     {
       "id": "qwen3_asr_0_6b_openvino",
       "task": "asr",
+      "status": "retired_legacy_openvino_runtime",
       "environment": "local-bench-qwen3-asr-openvino",
       "environment_manifest": "environments/qwen3_asr_openvino/requirements.txt",
       "worker": "workers/qwen3_asr_openvino_sustained_worker.py",
@@ -180,6 +283,7 @@
     {
       "id": "qwen3_asr_0_6b_hf_openvino",
       "task": "asr",
+      "status": "retired_legacy_hf_openvino_runtime",
       "environment": "local-bench-qwen3-asr-hf-openvino",
       "environment_manifest": "environments/qwen3_asr_hf_openvino/requirements.txt",
       "verify_script": "scripts/verify_qwen3_asr_hf_openvino_environment.py",
@@ -196,6 +300,35 @@
         {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 512},
         {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 4096},
         {"processes": 1, "device": "GPU", "threads_per_process": 4, "max_new_tokens": 4096}
+      ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_openvino_genai_official",
+      "task": "asr",
+      "environment": "local-bench-qwen3-asr-openvino-genai-official",
+      "environment_manifest": "environments/qwen3_asr_openvino_genai_official/requirements.lock.txt",
+      "verify_script": "scripts/verify_qwen3_asr_openvino_genai_official_environment.py",
+      "setup_script": "scripts/prepare_qwen3_asr_openvino_genai_official.ps1",
+      "fingerprint_files": [
+        "environments/qwen3_asr_openvino_genai_official/requirements.txt",
+        "scripts/prepare_qwen3_asr_openvino_genai_official.ps1",
+        "scripts/create_qwen3_asr_openvino_genai_official_environment.ps1",
+        "scripts/download_qwen3_asr_original_model.ps1",
+        "scripts/export_qwen3_asr_openvino_genai_official.py",
+        "workers/qwen3_asr_openvino_genai_export_manifest.py",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
+      "artifact_files": [
+        "data/models/qwen3-asr-0.6b-openvino-genai-official-f48d93f/export-complete.json",
+        "data/models/qwen3-asr-0.6b-openvino-genai-official-f48d93f/official-export-provenance.json"
+      ],
+      "worker": "workers/qwen3_asr_openvino_genai_sustained_worker.py",
+      "retired_config_indices": [2, 3],
+      "configs": [
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 512},
+        {"processes": 1, "device": "GPU.0", "threads_per_process": 4, "max_new_tokens": 512},
+        {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 4096},
+        {"processes": 1, "device": "GPU.0", "threads_per_process": 4, "max_new_tokens": 4096}
       ]
     }
   ]

@@ -33,8 +33,9 @@ def main() -> None:
         subset = build_subset(document, sample_ids)
         destination = QUALITY_ROOT / filename
         destination.write_text(
-            json.dumps(subset, ensure_ascii=False, indent=2),
+            json.dumps(subset, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
+            newline="\n",
         )
         print(destination)
 

@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "protocol": "bounded-vlm-b10598-assets-v1",
+  "runtime": {
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10598/llama-b10598-bin-win-cpu-x64.zip",
+    "revision": "b10598",
+    "source_revision": "56db501e73cfb10c8fcce61be708f5c3ee749271",
+    "archive": {
+      "path": "data/downloads/llama-b10598-bin-win-cpu-x64.zip",
+      "bytes": 18135717,
+      "sha256": "f4105db1d66c9137563aa5f7319691054e66220d48f3d885ecd7494f88cb09a6"
+    },
+    "extracted_tree": {
+      "path": "data/tools/llama-b10598-cpu",
+      "file_count": 52,
+      "total_bytes": 45896989,
+      "sha256": "2733cb092d581ac029038b06ab29b91291c73a1f70de4a3edfd1626534d48c0c"
+    },
+    "entrypoints": {
+      "llama_mtmd_cli": {
+        "path": "data/tools/llama-b10598-cpu/llama-mtmd-cli.exe",
+        "bytes": 84480,
+        "sha256": "a9a9d3af03798da0fe305cc5513149f2f65aa3310b53d0c89443c0a0a60d9453"
+      },
+      "llama_server": {
+        "path": "data/tools/llama-b10598-cpu/llama-server.exe",
+        "bytes": 9216,
+        "sha256": "5fe1c237ed938f480a3022b62aa0e1a012ae0cc7a362e0d17fcb980602dacb1b"
+      }
+    }
+  },
+  "candidates": {
+    "ovisocr2_q8_cpu": {
+      "upstream": {
+        "url": "https://huggingface.co/ATH-MaaS/OvisOCR2/tree/65c619d374b55d4152e85150fc1b003700bc1f0c",
+        "revision": "65c619d374b55d4152e85150fc1b003700bc1f0c"
+      },
+      "artifact_repository": {
+        "url": "https://huggingface.co/Abiray/OvisOCR2-GGUF/tree/8a22290a0c42dbcf84739d6d4c2763f877494ae0",
+        "revision": "8a22290a0c42dbcf84739d6d4c2763f877494ae0"
+      },
+      "compute_type": "q8_0_text_bf16_projector",
+      "artifacts": {
+        "model": {
+          "path": "data/models/ovisocr2-gguf-8a22290a/OvisOCR2-Q8_0.gguf",
+          "bytes": 811843498,
+          "sha256": "3fba6d94312e550575a92d55cffb8d75997bf68a9f133c92ab6ad7f0bf2bc93e"
+        },
+        "projector": {
+          "path": "data/models/ovisocr2-gguf-8a22290a/mmproj-BF16.gguf",
+          "bytes": 207346376,
+          "sha256": "19040aa7e90af72567f397c9398f0203b13555c3adbc625d01992f77735e2d8f"
+        }
+      },
+      "lineage_files": {},
+      "fixtures": {
+        "source_kind": "tracked_deterministic_generated_public",
+        "contains_private_course_data": false,
+        "manifest": {
+          "path": "data/inputs/generated/document_fidelity/ovisocr2_page_quality.json",
+          "bytes": 2290,
+          "sha256": "296e0b21e2db36e268ff6a4043209f0ac5aa1d1f7728b9550cfc1b853dd5aeba"
+        },
+        "images": {
+          "page_008_table_columns": {
+            "path": "data/inputs/generated/document_fidelity/page_008_table_columns.png",
+            "bytes": 55583,
+            "sha256": "ed156fa35692cd618bc236829588e38ecf03869f84d56691c09f704a59feaef6"
+          }
+        },
+        "generator_files": {
+          "document_fidelity": {
+            "path": "scripts/generate_document_fidelity_controls.py",
+            "bytes": 12806,
+            "sha256": "10ca4227500a008f936752b686a53b15a4d4f37d256f972f82ef0ab44e142bb9"
+          }
+        }
+      },
+      "sample_ids": [
+        "page_008_table_columns"
+      ],
+      "quality_gate": {
+        "maximum_failure_count": 0,
+        "maximum_token_cap_hit_count": 0,
+        "minimum_reading_order_pair_accuracy": 1.0,
+        "minimum_protected_span_recall": 1.0,
+        "minimum_lexical_recall": 0.9,
+        "minimum_lexical_precision": 0.9,
+        "minimum_table_cell_exact_fraction": 0.95
+      },
+      "failed_outcome_kind": "experimental_quality_gate_failed"
+    },
+    "hunyuanocr_1_5_gguf_cpu": {
+      "upstream": {
+        "url": "https://huggingface.co/tencent/HunyuanOCR/tree/449e7d471a8a1ef5bd5d652e4881183d7252cbc7",
+        "revision": "449e7d471a8a1ef5bd5d652e4881183d7252cbc7"
+      },
+      "compute_type": "f16",
+      "conversion": {
+        "url": "https://github.com/ggml-org/llama.cpp/blob/70adb1b4cea5ee39f867792c78dc59320921eda7/convert_hf_to_gguf.py",
+        "revision": "70adb1b4cea5ee39f867792c78dc59320921eda7",
+        "source_archive": {
+          "url": "https://github.com/ggml-org/llama.cpp/archive/70adb1b4cea5ee39f867792c78dc59320921eda7.zip",
+          "path": "data/vendor/llama.cpp-70adb1b4.zip",
+          "bytes": 38871070,
+          "sha256": "b297d4840c2aa913d955852248c9b56a4870627834182e41738d42ecd9e41510"
+        },
+        "extracted_tree": {
+          "path": "data/vendor/lc-70adb1b4",
+          "archive_root": "llama.cpp-70adb1b4cea5ee39f867792c78dc59320921eda7",
+          "file_count": 3455,
+          "total_bytes": 166116661,
+          "sha256": "af730de24f1db677111b8f11da6d73302f7a790528ed2b6f00938d7190dc7457"
+        },
+        "converter": {
+          "path": "data/vendor/lc-70adb1b4/convert_hf_to_gguf.py",
+          "bytes": 12798,
+          "sha256": "e38975e1c68d98ac1664dfd530616eb35c72294382a4dd873d4746b23f27779f"
+        },
+        "base_arguments": ["--outtype", "f16"],
+        "projector_arguments": ["--outtype", "f16", "--mmproj"]
+      },
+      "artifacts": {
+        "model": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/hyocr-f16.gguf",
+          "bytes": 1083218656,
+          "sha256": "c0a27bfb28e5dfa4ee4cabdfd23eeef2e6c9aa774e9463f2a274147d542d318f"
+        },
+        "projector": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/mmproj-hyocr-f16.gguf",
+          "bytes": 952999040,
+          "sha256": "2ebd7f60811724063b210d3f22b69d9af3eae0993117bf973f5f3bee2c2f5a30"
+        }
+      },
+      "lineage_files": {
+        "model_safetensors": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/model.safetensors",
+          "bytes": 2239932512,
+          "sha256": "632a1e082c4dd5a3284cf1ffcdba2fdaa06f435762c58c2f34aff0f3bd6c0249"
+        },
+        "config": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/config.json",
+          "bytes": 4771,
+          "sha256": "cc34ab90d0b873a1832c06e0f3fe127b47d7f390e8fda19445e4144068ed2af9"
+        },
+        "generation_config": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/generation_config.json",
+          "bytes": 139,
+          "sha256": "e9f4d443b97de6cb40767d12b5fc045a5ca3fb6d2f911124fce307bfbe1ad585"
+        },
+        "preprocessor_config": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/preprocessor_config.json",
+          "bytes": 579,
+          "sha256": "e17baf5f25f542380a3a8231fefa08f359d86db1ac088feb12ecb8b06ddb01c3"
+        },
+        "tokenizer": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/tokenizer.json",
+          "bytes": 9527297,
+          "sha256": "3e2ab46bcc5ed8bce013b245c6daecf19fa1d2a18f48a9c88a1f571dcbf7dfd3"
+        },
+        "tokenizer_config": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/tokenizer_config.json",
+          "bytes": 166592,
+          "sha256": "804e8a7fb5a129afb19f6ad88c51c5d3c1aa643b6abb9536d10bcdcf633b4d74"
+        },
+        "chat_template": {
+          "path": "data/models/hunyuanocr-1.5-449e7d47/chat_template.jinja",
+          "bytes": 994,
+          "sha256": "be3371395b9e67a8f981d86543eb5a93d132a1dc3f54058a2d75b4ed1efc73fe"
+        }
+      },
+      "fixtures": {
+        "source_kind": "tracked_deterministic_generated_public",
+        "contains_private_course_data": false,
+        "manifest": {
+          "path": "data/inputs/generated/ocr_quality/hunyuan_doc_quality.json",
+          "bytes": 2592,
+          "sha256": "1124b14b9363111767ab71ef7eac16726a93ee27653e387697071ff20cbfe4e9"
+        },
+        "images": {
+          "warmup": {
+            "path": "data/inputs/generated/ocr_quality/warmup.png",
+            "bytes": 8622,
+            "sha256": "c3958f643f0eda1fc1903f81b9dd13cbb44860ca2225c1c9000d4013a4d020e5"
+          },
+          "code_formula": {
+            "path": "data/inputs/generated/ocr_quality/code_formula.png",
+            "bytes": 53968,
+            "sha256": "3ff7a268928be00e61cb097208472873701cd53ad81573bfab0c1a3c1c036793"
+          },
+          "dense_table": {
+            "path": "data/inputs/generated/ocr_quality/dense_table.png",
+            "bytes": 53510,
+            "sha256": "0b623a79edb905ead733a654f769d02e7ba58cfcc80487ccd0bc2c8fbc8501b1"
+          },
+          "negative_diagram": {
+            "path": "data/inputs/generated/ocr_quality/negative_diagram.png",
+            "bytes": 26964,
+            "sha256": "6c5de8e95ec30f6985cf15fd0057d377148b7f2e86cdd32cc98e99181ebbde5f"
+          }
+        },
+        "generator_files": {
+          "ocr_quality": {
+            "path": "scripts/generate_ocr_quality_controls.py",
+            "bytes": 9104,
+            "sha256": "04da236c74b7397e064da650483355d90fef9fe5ae08127680945e07414d9151"
+          },
+          "quality_subset": {
+            "path": "scripts/prepare_hard_ocr_quality_subsets.py",
+            "bytes": 2296,
+            "sha256": "2edb551f7ec49b93666f2ede80674bef6b4e204e0563b95868ae4091e08e4026"
+          }
+        }
+      },
+      "sample_ids": [
+        "code_formula",
+        "dense_table",
+        "negative_diagram"
+      ],
+      "quality_gate": {
+        "maximum_failure_count": 0,
+        "maximum_token_cap_hit_count": 0,
+        "maximum_normalized_character_error_rate": 0.25,
+        "minimum_required_token_recall": 0.8,
+        "maximum_negative_false_positive_characters": 0
+      },
+      "failed_outcome_kind": "quality_blocker"
+    }
+  }
+}

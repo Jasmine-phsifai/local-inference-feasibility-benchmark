@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tarfile
 import wave
 from pathlib import Path
@@ -231,6 +232,7 @@ def main() -> None:
         "items": items,
         "references": references,
         "generator": {
+            "protocol": "mixed-asr-controls.v1",
             "sample_rate_hz": SAMPLE_RATE,
             "sample_width_bytes": 2,
             "channels": 1,
@@ -252,8 +254,9 @@ def main() -> None:
         },
     }
     MANIFEST_PATH.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(MANIFEST_PATH)
 
@@ -531,9 +534,9 @@ def _download_archive_verified(
 
 
 def _find_ffmpeg() -> Path:
-    known_path = Path("D:/Anaconda/envs/STA/Library/bin/ffmpeg.exe")
-    if known_path.is_file():
-        return known_path
+    environment_binary = Path(sys.prefix) / "Library" / "bin" / "ffmpeg.exe"
+    if environment_binary.is_file():
+        return environment_binary
     resolved = shutil.which("ffmpeg")
     if resolved:
         return Path(resolved)
