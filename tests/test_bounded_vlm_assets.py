@@ -82,9 +82,9 @@ def _registry_fixture(tmp_path: Path) -> tuple[Path, Path]:
                     "maximum_token_cap_hit_count": 0,
                     "minimum_reading_order_pair_accuracy": 1.0,
                     "minimum_protected_span_recall": 1.0,
-                    "minimum_lexical_recall": 0.9,
-                    "minimum_lexical_precision": 0.9,
-                    "minimum_table_cell_exact_fraction": 0.95,
+                    "minimum_structure_visible_lexical_recall": 0.9,
+                    "minimum_structure_visible_lexical_precision": 0.9,
+                    "minimum_semantic_table_cell_exact_fraction": 0.95,
                 },
                 "failed_outcome_kind": "experimental_quality_gate_failed",
             }
@@ -164,11 +164,11 @@ def test_candidate_contract_rejects_boolean_and_extra_quality_threshold(tmp_path
     candidate = json.loads(registry_path.read_text(encoding="utf-8"))["candidates"][
         OVIS
     ]
-    candidate["quality_gate"]["minimum_lexical_recall"] = True
-    with pytest.raises(ValueError, match="minimum_lexical_recall"):
+    candidate["quality_gate"]["minimum_structure_visible_lexical_recall"] = True
+    with pytest.raises(ValueError, match="minimum_structure_visible_lexical_recall"):
         _validate_candidate_contract(OVIS, candidate)
 
-    candidate["quality_gate"]["minimum_lexical_recall"] = 0.9
+    candidate["quality_gate"]["minimum_structure_visible_lexical_recall"] = 0.9
     candidate["quality_gate"]["unpublished_threshold"] = 0
     with pytest.raises(ValueError, match="quality gate names"):
         _validate_candidate_contract(OVIS, candidate)

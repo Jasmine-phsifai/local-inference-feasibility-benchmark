@@ -7,6 +7,7 @@ import json
 import math
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,8 +23,13 @@ from local_inference_bench.bounded_vlm_assets import (  # noqa: E402
 from local_inference_bench.load_sustained_workload import (  # noqa: E402
     load_sustained_workload,
 )
+from local_inference_bench.html_output_projection import (  # noqa: E402
+    extract_html_table_rows,
+    project_html_visible_text,
+)
 from local_inference_bench.score_document_fidelity import (  # noqa: E402
     _canonical_markdown,
+    _lexical_tokens,
     _score_sample as score_document_sample,
 )
 from local_inference_bench.score_ocr_quality import (  # noqa: E402
@@ -271,14 +277,27 @@ def _score_ovis(records: dict[str, dict], *, assets: dict) -> dict:
     reference = manifest.get("references", {}).get(sample_id)
     if not isinstance(reference, dict):
         raise ValueError("Ovis fixture reference is missing")
+    expected_visible_text = reference.get("expected_visible_text")
+    if type(expected_visible_text) is not str or not expected_visible_text.strip():
+        raise ValueError("Ovis visible-text reference is missing")
     _verify_reference_media_hash(reference, sample_id=sample_id, assets=assets)
     record = records[sample_id]
     prediction = record["prediction"] if record["success"] else ""
+    canonical_prediction = _canonical_markdown(prediction)
     score = score_document_sample(
         reference,
-        _canonical_markdown(prediction),
+        canonical_prediction,
         record,
         edit_budget=[5_000_000],
+    )
+    visible_lexical = _lexical_overlap(
+        expected_visible_text,
+        project_html_visible_text(canonical_prediction),
+    )
+    semantic_tables = extract_html_table_rows(canonical_prediction)
+    semantic_table = _score_semantic_html_tables(
+        reference["tables"],
+        semantic_tables,
     )
     return {
         "sample_count": 1,
@@ -288,14 +307,19 @@ def _score_ovis(records: dict[str, dict], *, assets: dict) -> dict:
         "protected_span_recall": _ratio(
             score["protected_hits"], score["protected_total"]
         ),
-        "lexical_recall": _ratio(score["lexical_hits"], score["lexical_expected"]),
-        "lexical_precision": _ratio(
+        "raw_lexical_recall": _ratio(
+            score["lexical_hits"], score["lexical_expected"]
+        ),
+        "raw_lexical_precision": _ratio(
             score["lexical_hits"], score["lexical_predicted"]
         ),
-        "table_cell_exact_fraction": _ratio(
+        "raw_gfm_table_cell_exact_fraction": _ratio(
             score["table_cell_hits"], score["table_cell_total"]
         ),
-        "complete_html_table_count": int(record.get("complete_html_table") is True),
+        "structure_visible_lexical_recall": visible_lexical["recall"],
+        "structure_visible_lexical_precision": visible_lexical["precision"],
+        "semantic_table_cell_exact_fraction": semantic_table["cell_exact_fraction"],
+        "complete_html_table_count": len(semantic_tables),
     }
 
 
@@ -306,40 +330,73 @@ def _score_hunyuan(records: dict[str, dict], *, assets: dict) -> dict:
     references = manifest.get("references")
     if not isinstance(references, dict) or set(references) != set(records):
         raise ValueError("Hunyuan fixture references do not match records")
-    edit_budget = [5_000_000]
-    scores = []
+    raw_scores = []
+    visible_scores = []
     for sample_id, record in records.items():
         reference = references[sample_id]
         _verify_reference_media_hash(reference, sample_id=sample_id, assets=assets)
-        lines = record.get("lines", []) if record["success"] else []
-        scores.append(
+        predicted_lines = (
+            [line for line in record["prediction"].splitlines() if line.strip()]
+            if record["success"]
+            else []
+        )
+        visible_prediction = project_html_visible_text("\n".join(predicted_lines))
+        visible_lines = visible_prediction.splitlines() if visible_prediction else []
+        common = {
+            "category": reference["category"],
+            "reference_lines": reference["lines"],
+            "required_tokens": reference["required_tokens"],
+            "confidences": [],
+            "failed": not record["success"],
+            "explicit_failed_record": not record["success"],
+            "missing_record": False,
+        }
+        raw_scores.append(
             score_ocr_sample(
-                category=reference["category"],
-                reference_lines=reference["lines"],
-                required_tokens=reference["required_tokens"],
-                predicted_lines=[line["text"] for line in lines],
-                confidences=[],
-                failed=not record["success"],
-                edit_budget=edit_budget,
+                **common,
+                predicted_lines=predicted_lines,
+                edit_budget=[5_000_000],
             )
         )
-    aggregate = aggregate_ocr_scores(scores)
-    overall = aggregate["overall"]
-    negative = aggregate["categories"].get("negative", {})
+        visible_scores.append(
+            score_ocr_sample(
+                **common,
+                predicted_lines=visible_lines,
+                edit_budget=[5_000_000],
+            )
+        )
+    raw_aggregate = aggregate_ocr_scores(raw_scores)
+    visible_aggregate = aggregate_ocr_scores(visible_scores)
+    raw_overall = raw_aggregate["overall"]
+    visible_overall = visible_aggregate["overall"]
+    raw_negative = raw_aggregate["categories"].get("negative", {})
+    visible_negative = visible_aggregate["categories"].get("negative", {})
     return {
-        "sample_count": overall["sample_count"],
-        "failure_count": overall["failure_count"],
+        "sample_count": raw_overall["sample_count"],
+        "failure_count": raw_overall["failure_count"],
         "token_cap_hit_count": sum(
             int(record["token_cap_hit"]) for record in records.values()
         ),
-        "normalized_character_error_rate": overall[
+        "raw_normalized_character_error_rate": raw_overall[
             "normalized_character_error_rate"
         ],
-        "required_token_recall": overall["required_token_recall"],
-        "mean_absolute_line_count_error": overall[
+        "raw_required_token_recall": raw_overall["required_token_recall"],
+        "raw_mean_absolute_line_count_error": raw_overall[
             "mean_absolute_line_count_error"
         ],
-        "negative_false_positive_characters": negative.get(
+        "raw_negative_false_positive_characters": raw_negative.get(
+            "false_positive_characters", 0
+        ),
+        "structure_visible_normalized_character_error_rate": visible_overall[
+            "normalized_character_error_rate"
+        ],
+        "structure_visible_required_token_recall": visible_overall[
+            "required_token_recall"
+        ],
+        "structure_visible_mean_absolute_line_count_error": visible_overall[
+            "mean_absolute_line_count_error"
+        ],
+        "structure_visible_negative_false_positive_characters": visible_negative.get(
             "false_positive_characters", 0
         ),
     }
@@ -353,17 +410,33 @@ def _quality_gate_passes(*, metrics: dict, gate: dict) -> bool:
     rules = {
         "minimum_reading_order_pair_accuracy": (">=", "reading_order_pair_accuracy"),
         "minimum_protected_span_recall": (">=", "protected_span_recall"),
-        "minimum_lexical_recall": (">=", "lexical_recall"),
-        "minimum_lexical_precision": (">=", "lexical_precision"),
-        "minimum_table_cell_exact_fraction": (">=", "table_cell_exact_fraction"),
-        "maximum_normalized_character_error_rate": (
-            "<=",
-            "normalized_character_error_rate",
+        "minimum_structure_visible_lexical_recall": (
+            ">=",
+            "structure_visible_lexical_recall",
         ),
-        "minimum_required_token_recall": (">=", "required_token_recall"),
-        "maximum_negative_false_positive_characters": (
+        "minimum_structure_visible_lexical_precision": (
+            ">=",
+            "structure_visible_lexical_precision",
+        ),
+        "minimum_semantic_table_cell_exact_fraction": (
+            ">=",
+            "semantic_table_cell_exact_fraction",
+        ),
+        "maximum_structure_visible_normalized_character_error_rate": (
             "<=",
-            "negative_false_positive_characters",
+            "structure_visible_normalized_character_error_rate",
+        ),
+        "minimum_structure_visible_required_token_recall": (
+            ">=",
+            "structure_visible_required_token_recall",
+        ),
+        "maximum_structure_visible_negative_false_positive_characters": (
+            "<=",
+            "structure_visible_negative_false_positive_characters",
+        ),
+        "maximum_raw_negative_false_positive_characters": (
+            "<=",
+            "raw_negative_false_positive_characters",
         ),
     }
     for gate_key, (operation, metric_key) in rules.items():
@@ -374,6 +447,54 @@ def _quality_gate_passes(*, metrics: dict, gate: dict) -> bool:
         if operation == "<=" and metrics[metric_key] > gate[gate_key]:
             return False
     return True
+
+
+def _lexical_overlap(expected: str, predicted: str) -> dict[str, float]:
+    expected_tokens = Counter(_lexical_tokens(expected))
+    predicted_tokens = Counter(_lexical_tokens(predicted))
+    hits = sum((expected_tokens & predicted_tokens).values())
+    return {
+        "recall": _ratio(hits, sum(expected_tokens.values())),
+        "precision": _ratio(hits, sum(predicted_tokens.values())),
+    }
+
+
+def _score_semantic_html_tables(
+    expected_tables: list[dict],
+    predicted_tables: list[list[list[str]]],
+) -> dict[str, float]:
+    expected_rows = [
+        [row for row in table["rows"] if not _is_gfm_separator_row(row)]
+        for table in expected_tables
+    ]
+    cell_hits = 0
+    cell_total = 0
+    for table_index in range(max(len(expected_rows), len(predicted_tables))):
+        expected = expected_rows[table_index] if table_index < len(expected_rows) else []
+        predicted = (
+            predicted_tables[table_index]
+            if table_index < len(predicted_tables)
+            else []
+        )
+        cell_total += max(
+            sum(len(row) for row in expected),
+            sum(len(row) for row in predicted),
+        )
+        for row_index, row in enumerate(expected):
+            for column_index, cell in enumerate(row):
+                if (
+                    row_index < len(predicted)
+                    and column_index < len(predicted[row_index])
+                    and predicted[row_index][column_index] == cell
+                ):
+                    cell_hits += 1
+    return {"cell_exact_fraction": _ratio(cell_hits, cell_total)}
+
+
+def _is_gfm_separator_row(row: list[str]) -> bool:
+    return bool(row) and all(
+        re.fullmatch(r":?-{3,}:?", cell.strip()) is not None for cell in row
+    )
 
 
 def _validate_request(
@@ -539,6 +660,13 @@ def _read_records(path: Path) -> dict[str, dict]:
             for output_line in lines:
                 if not isinstance(output_line, dict) or type(output_line.get("text")) is not str:
                     raise ValueError(f"invalid VLM line at record {line_number}")
+            expected_lines = [
+                {"text": output_line}
+                for output_line in prediction.splitlines()
+                if output_line.strip()
+            ]
+            if lines != expected_lines:
+                raise ValueError("VLM record lines do not match its prediction")
             total_characters += len(prediction)
             if total_characters > 1_000_000:
                 raise ValueError("bounded VLM record character budget exceeded")

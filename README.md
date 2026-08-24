@@ -13,7 +13,7 @@ graphics, and no discrete GPU.
 | Maximum OCR throughput | PP-OCRv6 Tiny, 6 processes x 4 Paddle threads, OpenCV threads = 1 |
 | Difficult-image escalation | Full-resolution RapidOCR plus human review; no tested CPU VLM qualifies for unattended escalation |
 | Bulk ASR | SenseVoice Small GGUF Q8 on the pinned v0.2 source runtime, 8 processes x 3 threads |
-| Timestamped ASR | faster-whisper Small int8, 10 resident model workers x 2 threads; accept mild sustained variability |
+| Timestamped ASR | faster-whisper Small int8, 10 resident model workers x 2 threads; accept variable sustained throughput |
 | Higher-quality ASR | No automatic lane qualifies; official OpenVINO GenAI Qwen3-ASR CPU is a manual second opinion only |
 | Intel iGPU | No qualified sustained/general crossover: a public 11-second after-load smoke favored the iGPU, while CPU was 9.527% faster in the tracked matched 32-second comparison; other durations remain unqualified |
 | OCRLLM | Use the active image facade for plain text, preserve geometry/structured output in a sidecar, and keep local ASR behind benchmark-owned adapters |
@@ -28,20 +28,20 @@ is explicitly superseded for recommendations.
 
 | Candidate | Configuration | Steady result | Stability and resources |
 |---|---|---:|---|
-| SenseVoice v0.2 | 8 x 3 | 123.4018 audio h/h; 622/622 in 604.9 s | CV 0.02460; 2.460 GiB; 76 threads; 98.75% host CPU |
-| faster-whisper | 10 x 2 | 27.9238 audio h/h; 140/140 in 601.6 s | CV 0.05127; 1.863 GiB; 193 threads; 85.76% host CPU |
-| RapidOCR full | 8 x 2, OpenCV = 1 | 12,710.79 images/h; 2,125/2,125 in 601.9 s | CV 0.02325; 2.937 GiB; 100 threads; 91.13% host CPU |
-| PP-OCRv6 Tiny | 6 x 4, OpenCV = 1 | 23,858.80 images/h; 3,985/3,985 in 601.3 s | CV 0.01669; 4.809 GiB; 130 threads; 99.57% host CPU |
+| SenseVoice v0.2 | 8 x 3 | 124.3449 audio h/h; 629/629 in 607.0 s | CV 0.01504; 2.413 GiB; 76 threads; 98.42% host CPU |
+| faster-whisper | 10 x 2 | 28.5292 audio h/h; 150/150 in 630.9 s | CV 0.24663; 1.875 GiB; 194 threads; 84.68% host CPU |
+| RapidOCR full | 8 x 2, OpenCV = 1 | 12,517.86 images/h; 2,092/2,092 in 601.6 s | CV 0.03029; 2.938 GiB; 100 threads; 94.21% host CPU |
+| PP-OCRv6 Tiny | 6 x 4, OpenCV = 1 | 22,780.07 images/h; 3,801/3,801 in 600.7 s | CV 0.01397; 5.001 GiB; 130 threads; 99.33% host CPU |
 
 All four runs recorded zero inference failures and zero available
 performance-limit or thermal-throttle flags. Package temperature is not
 available from this host, so no package-temperature claim is made. Normal OS,
 firmware, cooling, and power controls remained enabled.
 
-These rows preserve the latest pre-source-freeze measurements. The worker,
-workload-fingerprint, containment, and steady-window contracts have since been
-tightened, so the final evidence checkpoint must replace them with serialized
-runs from the frozen source before treating the exact rates as current.
+These are the serialized source-frozen runs. SenseVoice, RapidOCR, and PP Tiny
+meet the steady-window stability gate. faster-whisper completed every item but
+is explicitly `variable` (CV 0.24663; last:first 0.84211), so it remains a
+timestamp lane rather than the stable bulk-throughput default.
 
 The representative private workload came from a validated complete local
 lecture found through read-only inspection. Only ignored, de-identified samples
@@ -135,7 +135,7 @@ Exercise the independently installed active OCRLLM image facade on the tracked
 generated code/formula control without appending an event:
 
 ```powershell
-& 'D:\Anaconda\envs\local-bench-ocrllm-master-f234f39\python.exe' scripts\check_ocrllm_image_facade.py `
+& 'D:\Anaconda\envs\local-bench-ocrllm-master-2827c98\python.exe' scripts\check_ocrllm_image_facade.py `
   --image data\inputs\generated\ocr_quality\code_formula.png `
   --manifest data\inputs\generated\ocr_quality\hunyuan_doc_quality.json
 ```

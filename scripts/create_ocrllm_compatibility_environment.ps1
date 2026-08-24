@@ -1,14 +1,14 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$snapshotRoot = Join-Path $projectRoot 'data\vendor\ocrllm-master-f234f39'
+$snapshotRoot = Join-Path $projectRoot 'data\vendor\ocrllm-master-2827c98'
 $lock = Join-Path $projectRoot 'environments\ocrllm_compatibility\requirements.lock.txt'
-$environmentName = 'local-bench-ocrllm-master-f234f39'
+$environmentName = 'local-bench-ocrllm-master-2827c98'
 $environmentPython = "D:\Anaconda\envs\$environmentName\python.exe"
 $conda = 'D:\Anaconda\Scripts\conda.exe'
 $git = 'C:\Program Files\Git\cmd\git.exe'
 $sourceRepository = 'https://github.com/Jasmine-phsifai/LLM-based-OQC-scanner-for-textbook-pdfs-and-courses.git'
-$expectedRevision = 'f234f3958f9e55d5bb9993338792ffc0cadc01fe'
+$expectedRevision = '2827c98b802932d6bbc0b71bd8d8d4188fa6a0b0'
 $reviewedBaseline = '47c12efe91640659a711c8bd3429dae6a4fe44f5'
 
 if (-not (Test-Path -LiteralPath (Join-Path $snapshotRoot '.git'))) {

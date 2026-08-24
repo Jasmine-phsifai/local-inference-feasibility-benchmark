@@ -1089,6 +1089,40 @@ def test_bounded_invalidation_can_resolve_unique_replacement_by_protocol(tmp_pat
     assert _validate(tmp_path, _attempt(), bounded=bounded) == []
 
 
+def test_bounded_scorer_invalidation_can_bind_same_protocol_by_timestamp(
+    tmp_path: Path,
+) -> None:
+    bounded = [
+        {
+            "event": "bounded_candidate_quality_verified",
+            "protocol": "bounded-community-screen-v4",
+            "timestamp_utc": "old",
+            "candidate_id": "candidate",
+            "workload_class": "generated_quality_control",
+        },
+        {
+            "event": "bounded_candidate_quality_verified",
+            "protocol": "bounded-community-screen-v4",
+            "timestamp_utc": "new",
+            "candidate_id": "candidate",
+            "workload_class": "generated_quality_control",
+        },
+        {
+            "event": "bounded_event_invalidated",
+            "reason_kind": "structure_aware_scorer_failed_adversarial_validation",
+            "candidate_id": "candidate",
+            "workload_class": "generated_quality_control",
+            "invalidated_protocol": "bounded-community-screen-v4",
+            "invalidated_event_timestamp_utc": "old",
+            "replacement_protocol": "bounded-community-screen-v4",
+            "replacement_event_timestamp_utc": "new",
+            "timestamp_utc": "correction",
+        },
+    ]
+
+    assert _validate(tmp_path, _attempt(), bounded=bounded) == []
+
+
 def test_hash_bound_supersession_can_retire_only_a_correction(tmp_path: Path) -> None:
     events = _attempt(terminal="sustained_attempt_failed")
     events[1]["result"] = {

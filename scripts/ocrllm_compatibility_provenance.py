@@ -15,11 +15,11 @@ from typing import get_args
 from urllib.parse import unquote, urlparse
 
 
-EXPECTED_REVISION = "f234f3958f9e55d5bb9993338792ffc0cadc01fe"
+EXPECTED_REVISION = "2827c98b802932d6bbc0b71bd8d8d4188fa6a0b0"
 EXPECTED_VERSION = "0.1.0"
 EXPECTED_PYTHON_VERSION = "3.11.15"
 REVIEWED_BASELINE = "47c12efe91640659a711c8bd3429dae6a4fe44f5"
-SNAPSHOT_RELATIVE_PATH = Path("data/vendor/ocrllm-master-f234f39")
+SNAPSHOT_RELATIVE_PATH = Path("data/vendor/ocrllm-master-2827c98")
 EXPECTED_RUNTIME_VERSIONS = {
     "numpy": "2.4.6",
     "onnxruntime": "1.23.2",

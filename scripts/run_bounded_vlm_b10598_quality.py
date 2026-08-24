@@ -365,6 +365,7 @@ def _producer_hashes(candidate_id: str) -> dict[str, str]:
     relative_paths = [
         "scripts/run_bounded_vlm_b10598_quality.py",
         "src/local_inference_bench/bounded_vlm_assets.py",
+        "src/local_inference_bench/html_output_projection.py",
         "src/local_inference_bench/load_sustained_workload.py",
         "src/local_inference_bench/resource_monitor.py",
         "src/local_inference_bench/score_document_fidelity.py",

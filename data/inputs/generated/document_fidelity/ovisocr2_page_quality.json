@@ -17,6 +17,7 @@
       "marker": "<!-- meta:page number=8 -->",
       "page_number": 8,
       "expected_markdown": "<!-- meta:page number=8 -->\n## Runtime comparison\n\n| ID | Device | Error |\n| --- | --- | --- |\n| A-01 | CPU | 0.031 |\n| A-02 | iGPU | 0.027 |\n\n### Notes\n\n1. Read the left table before the right notes.\n2. Preserve A-01 and A-02 exactly.\n3. The shapes below are unlabeled.",
+      "expected_visible_text": "Runtime comparison\nID Device Error\nA-01 CPU 0.031\nA-02 iGPU 0.027\nNotes\n1. Read the left table before the right notes.\n2. Preserve A-01 and A-02 exactly.\n3. The shapes below are unlabeled.",
       "headings": [
         "## Runtime comparison",
         "### Notes"

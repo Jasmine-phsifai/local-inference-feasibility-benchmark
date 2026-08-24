@@ -43,6 +43,7 @@ def _ovis_run_fixture(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
                 "image_sha256": image_sha,
                 "marker": "<!-- meta:page number=8 -->",
                 "expected_markdown": expected,
+                "expected_visible_text": "Runtime comparison\nA-01 CPU 0.031",
                 "headings": ["## Runtime comparison"],
                 "formulas": [],
                 "code_blocks": [],
@@ -91,9 +92,9 @@ def _ovis_run_fixture(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
                 "maximum_token_cap_hit_count": 0,
                 "minimum_reading_order_pair_accuracy": 1.0,
                 "minimum_protected_span_recall": 1.0,
-                "minimum_lexical_recall": 0.9,
-                "minimum_lexical_precision": 0.9,
-                "minimum_table_cell_exact_fraction": 0.95,
+                "minimum_structure_visible_lexical_recall": 0.9,
+                "minimum_structure_visible_lexical_precision": 0.9,
+                "minimum_semantic_table_cell_exact_fraction": 0.95,
             },
             "failed_outcome_kind": "experimental_quality_gate_failed",
         },
@@ -228,6 +229,8 @@ def test_v3_builder_emits_only_bound_aggregate_evidence(tmp_path, monkeypatch):
 
     assert event["result"]["outcome_kind"] == "experimental_quality_gate_failed"
     assert event["result"]["runtime_completed_without_implementation_failure"] is True
+    assert "raw_lexical_recall" in event["result"]["fidelity"]
+    assert "structure_visible_lexical_recall" in event["result"]["fidelity"]
     assert len(event["provenance"]["records_sha256"]) == 64
     serialized = json.dumps(event)
     assert str(project_root) not in serialized
@@ -305,6 +308,102 @@ def test_public_event_throughput_requires_positive_finite_wall(wall) -> None:
         )
 
 
+def test_semantic_html_table_score_ignores_gfm_separator_row() -> None:
+    expected = [
+        {
+            "rows": [
+                ["ID", "Device", "Error"],
+                ["---", ":---:", "---:"],
+                ["A-01", "CPU", "0.031"],
+            ]
+        }
+    ]
+    predicted = [
+        [["ID", "Device", "Error"], ["A-01", "CPU", "0.031"]]
+    ]
+
+    assert builder._score_semantic_html_tables(
+        expected, predicted
+    )["cell_exact_fraction"] == 1.0
+
+
+def test_structure_visible_quality_gate_uses_explicit_metrics() -> None:
+    metrics = {
+        "failure_count": 0,
+        "token_cap_hit_count": 0,
+        "structure_visible_lexical_recall": 0.89,
+        "structure_visible_lexical_precision": 1.0,
+        "semantic_table_cell_exact_fraction": 1.0,
+    }
+    gate = {
+        "maximum_failure_count": 0,
+        "maximum_token_cap_hit_count": 0,
+        "minimum_structure_visible_lexical_recall": 0.9,
+        "minimum_structure_visible_lexical_precision": 0.9,
+        "minimum_semantic_table_cell_exact_fraction": 0.95,
+    }
+
+    assert builder._quality_gate_passes(metrics=metrics, gate=gate) is False
+
+
+def test_like_for_like_visible_lexical_score_can_pass_for_html() -> None:
+    expected = "Runtime comparison\nID Device Error\nA-01 CPU 0.031"
+    predicted = (
+        "<h2>Runtime comparison</h2><table><tr><th>ID</th><th>Device</th>"
+        "<th>Error</th></tr><tr><td>A-01</td><td>CPU</td>"
+        "<td>0.031</td></tr></table>"
+    )
+
+    score = builder._lexical_overlap(
+        expected,
+        builder.project_html_visible_text(predicted),
+    )
+
+    assert score == {"recall": 1.0, "precision": 1.0}
+
+
+def test_raw_negative_false_positives_remain_a_hard_gate() -> None:
+    metrics = {
+        "failure_count": 0,
+        "token_cap_hit_count": 0,
+        "structure_visible_normalized_character_error_rate": 0.0,
+        "structure_visible_required_token_recall": 1.0,
+        "structure_visible_negative_false_positive_characters": 0,
+        "raw_negative_false_positive_characters": 1,
+    }
+    gate = {
+        "maximum_failure_count": 0,
+        "maximum_token_cap_hit_count": 0,
+        "maximum_structure_visible_normalized_character_error_rate": 0.25,
+        "minimum_structure_visible_required_token_recall": 0.8,
+        "maximum_structure_visible_negative_false_positive_characters": 0,
+        "maximum_raw_negative_false_positive_characters": 0,
+    }
+
+    assert builder._quality_gate_passes(metrics=metrics, gate=gate) is False
+
+
+def test_record_reader_rejects_lines_that_differ_from_prediction(tmp_path: Path) -> None:
+    path = tmp_path / "records.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "sample_id": "sample",
+                "success": True,
+                "prediction": "trusted output",
+                "lines": [{"text": "different output"}],
+                "token_cap_hit": False,
+                "stop_finish": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="lines do not match"):
+        builder._read_records(path)
+
+
 def test_hunyuan_registry_names_failed_runtime_gate_as_quality_blocker():
     registry = json.loads(
         Path("registries/bounded_vlm_b10598_assets.json").read_text(encoding="utf-8")
@@ -338,6 +437,7 @@ def test_reference_media_hash_must_match_verified_fixture_asset() -> None:
     "dependency",
     (
         "src/local_inference_bench/load_sustained_workload.py",
+        "src/local_inference_bench/html_output_projection.py",
         "src/local_inference_bench/score_document_fidelity.py",
         "src/local_inference_bench/score_ocr_quality.py",
         "src/local_inference_bench/validate_public_summary.py",
@@ -352,6 +452,7 @@ def test_v3_producer_hashes_change_with_each_scoring_dependency(
     producer_paths = {
         "scripts/run_bounded_vlm_b10598_quality.py",
         "src/local_inference_bench/bounded_vlm_assets.py",
+        "src/local_inference_bench/html_output_projection.py",
         "src/local_inference_bench/load_sustained_workload.py",
         "src/local_inference_bench/resource_monitor.py",
         "src/local_inference_bench/score_document_fidelity.py",

@@ -60,7 +60,9 @@ _MAX_PROVENANCE_BYTES = 65_536
 _MAX_REGISTRY_BYTES = 2 * 1_048_576
 _MAX_PREDICTION_CHARACTERS = 200_000
 _MAX_TOTAL_PREDICTION_CHARACTERS = 2_000_000
-_MAX_TOTAL_EDIT_CELLS = 5_000_000
+# Three 20-minute, ten-chunk lecture sources require about 100 million cells.
+# Keep the exact dynamic program bounded while admitting that measured cohort.
+_MAX_TOTAL_EDIT_CELLS = 150_000_000
 _MAX_TOTAL_PCM_FRAME_COUNT = 24 * 60 * 60 * 16_000
 _MAX_PCM_WAV_BYTES = 7200 * 16_000 * 2 + 1_048_576
 _SOURCE_STATUSES = frozenset({"succeeded", "partial_failure", "all_failed"})

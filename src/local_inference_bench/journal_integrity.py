@@ -72,7 +72,10 @@ EVENT_INVALIDATION_REASONS = {
         }
     ),
     "bounded_event_invalidated": frozenset(
-        {"source_ancestry_claim_not_executed_by_harness"}
+        {
+            "source_ancestry_claim_not_executed_by_harness",
+            "structure_aware_scorer_failed_adversarial_validation",
+        }
     ),
 }
 REPLACEABLE_EVENT_KINDS = {

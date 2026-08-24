@@ -300,6 +300,18 @@ def _page_table_columns() -> dict:
             "3. The shapes below are unlabeled.",
         ]
     )
+    expected_visible = "\n".join(
+        [
+            "Runtime comparison",
+            "ID Device Error",
+            "A-01 CPU 0.031",
+            "A-02 iGPU 0.027",
+            "Notes",
+            "1. Read the left table before the right notes.",
+            "2. Preserve A-01 and A-02 exactly.",
+            "3. The shapes below are unlabeled.",
+        ]
+    )
     image = Image.new("RGB", CANVAS_SIZE, "#eef3f8")
     draw = ImageDraw.Draw(image)
     draw.text((80, 55), "Runtime comparison", font=_font("msyh.ttc", 55), fill="#17324d")
@@ -351,6 +363,7 @@ def _page_table_columns() -> dict:
             "marker": marker,
             "page_number": 8,
             "expected_markdown": expected,
+            "expected_visible_text": expected_visible,
             "headings": ["## Runtime comparison", "### Notes"],
             "formulas": [],
             "code_blocks": [],

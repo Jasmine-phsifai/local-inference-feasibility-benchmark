@@ -2232,3 +2232,13 @@ def test_bounds_edit_distance_work() -> None:
 
     assert _bounded_levenshtein("same", "same", budget) == 0
     assert budget == [3]
+
+
+def test_default_edit_budget_covers_three_long_lecture_sources() -> None:
+    pair_count = 3
+    sample_count = 10
+    characters_per_output = 2_000
+
+    assert agreement_scorer._MAX_TOTAL_EDIT_CELLS >= (
+        pair_count * sample_count * characters_per_output**2
+    )
