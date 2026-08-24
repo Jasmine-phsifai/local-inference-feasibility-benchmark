@@ -7,8 +7,13 @@ from pathlib import Path
 import pytest
 
 import scripts.prepare_blind_ocr_comparison as prepare_module
+from local_inference_bench.event_journal import read_events
+from local_inference_bench.fingerprint import fingerprint_json
 from local_inference_bench.load_sustained_workload import load_sustained_workload
 from scripts.aggregate_blind_ocr_judgments import (
+    _append_public_event_once,
+    _public_event_sha256,
+    _validated_registered_sources,
     _validated_source_attempts,
     aggregate_judgments,
 )
@@ -35,13 +40,32 @@ def _source_attempt(
     config_index: int | None = None,
     attempt_status: str = "succeeded",
 ) -> dict:
+    if candidate_id is None:
+        candidate_id, default_config_index = (
+            ("ppocrv6_tiny_cpu", 13)
+            if index % 2
+            else ("rapidocr_cpu", 17)
+        )
+        if config_index is None:
+            config_index = default_config_index
+    if config_index is None:
+        raise ValueError("test source requires a registered config index")
+    registry = json.loads(
+        prepare_module._PROJECT_ROOT.joinpath(
+            "registries", "sustained_candidates.json"
+        ).read_text(encoding="utf-8")
+    )
+    candidate = next(
+        item for item in registry["candidates"] if item["id"] == candidate_id
+    )
+    config = candidate["configs"][config_index]
     return {
         "variant_id": variant_id,
-        "candidate_id": candidate_id or variant_id,
+        "candidate_id": candidate_id,
         "attempt_id": str(uuid.UUID(f"00000000-0000-4000-8000-{index:012d}")),
         "attempt_key": f"{index:016x}",
-        "config_index": index if config_index is None else config_index,
-        "config_fingerprint": f"{index + 100:016x}",
+        "config_index": config_index,
+        "config_fingerprint": fingerprint_json(config),
         "trial_index": 0,
         "attempt_status": attempt_status,
     }
@@ -549,22 +573,31 @@ def test_aggregate_publishes_unambiguous_same_candidate_variant_attribution(
 
     event = aggregate_judgments(mapping_path, judgments)
 
-    assert event["source_variants"] == [
+    rapid = next(
+        item
+        for item in json.loads(
+            prepare_module._PROJECT_ROOT.joinpath(
+                "registries", "sustained_candidates.json"
+            ).read_text(encoding="utf-8")
+        )["candidates"]
+        if item["id"] == "rapidocr_cpu"
+    )
+    assert event["source_candidates"] == [
         {
-            "variant_id": "one",
+            "candidate_evidence_id": 1,
             "candidate_id": "rapidocr_cpu",
-            "config_index": 17,
-            "config_fingerprint": f"{101:016x}",
+            "config_index": 14,
+            "config_fingerprint": fingerprint_json(rapid["configs"][14]),
             "attempt_status": "succeeded",
             "selected_available_record_count": 1,
             "selected_failed_record_count": 0,
             "selected_unavailable_record_count": 0,
         },
         {
-            "variant_id": "two",
+            "candidate_evidence_id": 2,
             "candidate_id": "rapidocr_cpu",
-            "config_index": 14,
-            "config_fingerprint": f"{102:016x}",
+            "config_index": 17,
+            "config_fingerprint": fingerprint_json(rapid["configs"][17]),
             "attempt_status": "succeeded",
             "selected_available_record_count": 1,
             "selected_failed_record_count": 0,
@@ -598,23 +631,23 @@ def test_failed_and_unavailable_records_are_disclosed_and_counted(
         "unavailable",
     }
     event = aggregate_judgments(mapping_path, judgments)
-    variants = {item["variant_id"]: item for item in event["source_variants"]}
+    sources = {item["candidate_id"]: item for item in event["source_candidates"]}
 
-    assert variants["one"]["attempt_status"] == "partial_failure"
-    assert variants["one"]["selected_failed_record_count"] == 1
-    assert variants["one"]["selected_unavailable_record_count"] == 0
-    assert variants["two"]["attempt_status"] == "all_failed"
-    assert variants["two"]["selected_failed_record_count"] == 0
-    assert variants["two"]["selected_unavailable_record_count"] == 1
+    assert sources["ppocrv6_tiny_cpu"]["attempt_status"] == "partial_failure"
+    assert sources["ppocrv6_tiny_cpu"]["selected_failed_record_count"] == 1
+    assert sources["ppocrv6_tiny_cpu"]["selected_unavailable_record_count"] == 0
+    assert sources["rapidocr_cpu"]["attempt_status"] == "all_failed"
+    assert sources["rapidocr_cpu"]["selected_failed_record_count"] == 0
+    assert sources["rapidocr_cpu"]["selected_unavailable_record_count"] == 1
     assert event["metrics"]["source_record_availability"] == {
-        "variant_sample_count": 2,
+        "candidate_sample_count": 2,
         "available_record_count": 0,
         "failed_record_count": 1,
         "unavailable_record_count": 1,
     }
-    for variant_metrics in event["metrics"]["variants"].values():
-        assert variant_metrics["mean_error_severity_vote_denominator"] == 2
-        assert variant_metrics["usable_vote_denominator"] == 2
+    for candidate_metrics in event["metrics"]["candidates"]:
+        assert candidate_metrics["mean_error_severity_vote_denominator"] == 2
+        assert candidate_metrics["usable_vote_denominator"] == 2
     assert event["metrics"]["comparison_sample_denominators"] == {
         "total_selected_sample_count": 1,
         "individual_winner_vote_denominator": 2,
@@ -734,12 +767,33 @@ def test_aggregation_resolves_strict_majority_without_private_fingerprint(
     identities = mapping["samples"][0]["identities"]
     private_image_sha256 = mapping["samples"][0]["image_sha256"]
 
-    assert event["protocol"] == "private-ocr-blind-v8"
-    assert event["metrics"]["variants"][identities["A"]]["consensus_wins"] == 1
-    assert event["metrics"]["variants"][identities["B"]]["consensus_wins"] == 0
-    for variant_metrics in event["metrics"]["variants"].values():
-        assert variant_metrics["mean_error_severity_vote_denominator"] == 3
-        assert variant_metrics["usable_vote_denominator"] == 3
+    assert event["protocol"] == "private-ocr-blind-v9"
+    assert event["public_event_sha256"] == _public_event_sha256(event)
+    candidate_metrics = {
+        item["candidate_evidence_id"]: item
+        for item in event["metrics"]["candidates"]
+    }
+    evidence_id_by_variant = {"one": 1, "two": 2}
+    assert candidate_metrics[evidence_id_by_variant[identities["A"]]][
+        "consensus_wins"
+    ] == 1
+    assert candidate_metrics[evidence_id_by_variant[identities["B"]]][
+        "consensus_wins"
+    ] == 0
+    assert candidate_metrics[evidence_id_by_variant[identities["A"]]][
+        "win_votes"
+    ] == 2
+    assert candidate_metrics[evidence_id_by_variant[identities["B"]]][
+        "win_votes"
+    ] == 0
+    for metrics in candidate_metrics.values():
+        assert metrics["mean_error_severity_vote_denominator"] == 3
+        assert metrics["usable_vote_denominator"] == 3
+    assert event["judgment_file_count"] == 3
+    assert event["metrics"]["judgment_file_count"] == 3
+    assert event["metrics"]["tie_vote_count"] == 1
+    assert event["metrics"]["consensus_tie_sample_count"] == 0
+    assert event["metrics"]["no_strict_majority_sample_count"] == 0
     assert event["metrics"]["strict_majority_sample_fraction"] == 1.0
     assert event["metrics"]["unanimous_sample_fraction"] == 0.0
     assert event["metrics"]["pairwise_winner_agreement_fraction"] == pytest.approx(
@@ -748,14 +802,21 @@ def test_aggregation_resolves_strict_majority_without_private_fingerprint(
     assert "judgment_set_fingerprint" not in event
     assert event["interpretation"]["private_fingerprints_published"] is False
     assert event["interpretation"]["private_run_identifiers_published"] is False
-    assert event["interpretation"]["mapping_commitment_verified"] is True
-    assert event["interpretation"]["semantic_duplicate_guard"] is True
+    assert event["interpretation"]["mapping_commitment_locally_verified"] is True
+    assert (
+        event["interpretation"]["exact_judgment_payload_uniqueness_enforced"]
+        is True
+    )
     assert event["interpretation"]["procedural_blinding_only"] is True
-    assert event["interpretation"]["judge_independence_verified"] is False
+    assert (
+        event["interpretation"]["judge_identity_uniqueness_verified"] is False
+    )
+    assert event["interpretation"]["semantic_independence_verified"] is False
+    assert event["interpretation"]["mapping_access_restriction_verified"] is False
     assert event["interpretation"]["private_image_hashes_published"] is False
     assert private_image_sha256 not in json.dumps(event)
     assert event["metrics"]["source_record_availability"] == {
-        "variant_sample_count": 2,
+        "candidate_sample_count": 2,
         "available_record_count": 2,
         "failed_record_count": 0,
         "unavailable_record_count": 0,
@@ -770,22 +831,40 @@ def test_aggregation_resolves_strict_majority_without_private_fingerprint(
         "fully_available_comparison_count": 1,
         "not_fully_available_comparison_count": 0,
     }
-    assert event["source_variants"] == [
+    pp = next(
+        item
+        for item in json.loads(
+            prepare_module._PROJECT_ROOT.joinpath(
+                "registries", "sustained_candidates.json"
+            ).read_text(encoding="utf-8")
+        )["candidates"]
+        if item["id"] == "ppocrv6_tiny_cpu"
+    )
+    rapid = next(
+        item
+        for item in json.loads(
+            prepare_module._PROJECT_ROOT.joinpath(
+                "registries", "sustained_candidates.json"
+            ).read_text(encoding="utf-8")
+        )["candidates"]
+        if item["id"] == "rapidocr_cpu"
+    )
+    assert event["source_candidates"] == [
         {
-            "variant_id": "one",
-            "candidate_id": "one",
-            "config_index": 1,
-            "config_fingerprint": f"{101:016x}",
+            "candidate_evidence_id": 1,
+            "candidate_id": "ppocrv6_tiny_cpu",
+            "config_index": 13,
+            "config_fingerprint": fingerprint_json(pp["configs"][13]),
             "attempt_status": "succeeded",
             "selected_available_record_count": 1,
             "selected_failed_record_count": 0,
             "selected_unavailable_record_count": 0,
         },
         {
-            "variant_id": "two",
-            "candidate_id": "two",
-            "config_index": 2,
-            "config_fingerprint": f"{102:016x}",
+            "candidate_evidence_id": 2,
+            "candidate_id": "rapidocr_cpu",
+            "config_index": 17,
+            "config_fingerprint": fingerprint_json(rapid["configs"][17]),
             "attempt_status": "succeeded",
             "selected_available_record_count": 1,
             "selected_failed_record_count": 0,
@@ -795,8 +874,12 @@ def test_aggregation_resolves_strict_majority_without_private_fingerprint(
     assert set(event["producer_sha256"]) == {
         "scripts/aggregate_blind_ocr_judgments.py",
         "scripts/prepare_blind_ocr_comparison.py",
+        "registries/sustained_candidates.json",
+        "src/local_inference_bench/event_journal.py",
         "src/local_inference_bench/fingerprint.py",
+        "src/local_inference_bench/load_registry.py",
         "src/local_inference_bench/load_sustained_workload.py",
+        "src/local_inference_bench/project_paths.py",
         "src/local_inference_bench/validate_public_summary.py",
     }
     for relative_path, digest in mapping["preparation_producer_sha256"].items():
@@ -804,12 +887,130 @@ def test_aggregation_resolves_strict_majority_without_private_fingerprint(
     project_root = Path(__file__).resolve().parents[1]
     for relative_path in (
         "scripts/aggregate_blind_ocr_judgments.py",
+        "registries/sustained_candidates.json",
+        "src/local_inference_bench/event_journal.py",
+        "src/local_inference_bench/fingerprint.py",
+        "src/local_inference_bench/load_registry.py",
+        "src/local_inference_bench/project_paths.py",
         "src/local_inference_bench/validate_public_summary.py",
     ):
         assert event["producer_sha256"][relative_path] == _sha256(
             project_root / relative_path
         )
     assert "source_attempts" not in event
+    assert "one" not in json.dumps(event)
+    assert "two" not in json.dumps(event)
+
+
+def test_identical_public_blind_claim_appends_once(tmp_path: Path) -> None:
+    _, mapping_path, packet_fingerprint = _write_sealed_packet_and_mapping(tmp_path)
+    judgments = _write_distinct_judgments(tmp_path, packet_fingerprint)
+    first = aggregate_judgments(mapping_path, judgments)
+    second = aggregate_judgments(mapping_path, judgments)
+    journal = tmp_path / "quality-events.jsonl"
+
+    assert first["public_event_sha256"] == second["public_event_sha256"]
+    assert _append_public_event_once(journal, first) is True
+    assert _append_public_event_once(journal, second) is False
+    assert len(read_events(journal)) == 1
+
+
+def test_blind_public_append_rejects_stale_hash(tmp_path: Path) -> None:
+    _, mapping_path, packet_fingerprint = _write_sealed_packet_and_mapping(tmp_path)
+    judgments = _write_distinct_judgments(tmp_path, packet_fingerprint)
+    event = aggregate_judgments(mapping_path, judgments)
+    event["metrics"]["sample_count"] += 1
+
+    with pytest.raises(ValueError, match="public event identity"):
+        _append_public_event_once(tmp_path / "quality-events.jsonl", event)
+
+
+@pytest.mark.parametrize(
+    "candidate_override",
+    [
+        {"status": "retired_after_validation"},
+        {"configs": [{"processes": 1, "phases": ["compatibility"]}]},
+    ],
+)
+def test_blind_registered_source_requires_active_quality_config(
+    tmp_path: Path,
+    candidate_override: dict,
+) -> None:
+    config = {"processes": 1}
+    candidate = {
+        "id": "test_ocr",
+        "task": "ocr",
+        "status": "active",
+        "allowed_phases": ["quality"],
+        "configs": [config],
+    }
+    candidate.update(candidate_override)
+    effective_config = candidate["configs"][0]
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps({"candidates": [candidate]}),
+        encoding="utf-8",
+    )
+    source = {
+        "variant_id": "variant_a",
+        "candidate_id": "test_ocr",
+        "config_index": 0,
+        "config_fingerprint": fingerprint_json(effective_config),
+    }
+
+    with pytest.raises(ValueError, match="does not match the registry"):
+        _validated_registered_sources([source], registry_path=registry_path)
+
+
+def test_strict_majority_tie_is_not_a_candidate_consensus_win(
+    tmp_path: Path,
+) -> None:
+    _, mapping_path, packet_fingerprint = _write_sealed_packet_and_mapping(tmp_path)
+    judgments = []
+    for index, winner in enumerate(("tie", "tie", "A")):
+        path = tmp_path / f"judgment_{index}.json"
+        _write_judgment(
+            path,
+            packet_fingerprint=packet_fingerprint,
+            winner=winner,
+            a_severity=index,
+        )
+        judgments.append(path)
+
+    event = aggregate_judgments(mapping_path, judgments)
+
+    assert event["metrics"]["strict_majority_sample_fraction"] == 1.0
+    assert event["metrics"]["consensus_tie_sample_count"] == 1
+    assert event["metrics"]["no_strict_majority_sample_count"] == 0
+    assert sum(
+        candidate["consensus_wins"]
+        for candidate in event["metrics"]["candidates"]
+    ) == 0
+
+
+@pytest.mark.parametrize("mutation", ["candidate", "config_fingerprint"])
+def test_aggregation_rejects_unregistered_or_mismatched_public_identity(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    attempts = [_source_attempt("one", 1), _source_attempt("two", 2)]
+    if mutation == "candidate":
+        attempts[0]["candidate_id"] = "teacher_alice"
+    else:
+        attempts[0]["config_fingerprint"] = "f" * 16
+    _, mapping_path, packet_fingerprint = _write_sealed_packet_and_mapping(
+        tmp_path,
+        source_attempts=attempts,
+    )
+    judgments = _write_distinct_judgments(tmp_path, packet_fingerprint)
+
+    expected = (
+        "candidate is not registered"
+        if mutation == "candidate"
+        else "does not match the registry"
+    )
+    with pytest.raises(ValueError, match=expected):
+        aggregate_judgments(mapping_path, judgments)
 
 
 def test_four_judges_require_more_than_two_matching_votes(tmp_path: Path) -> None:
@@ -835,10 +1036,11 @@ def test_four_judges_require_more_than_two_matching_votes(tmp_path: Path) -> Non
     assert event["metrics"]["comparison_sample_denominators"][
         "pairwise_winner_agreement_denominator"
     ] == 6
-    for variant_metrics in event["metrics"]["variants"].values():
-        assert variant_metrics["mean_error_severity_vote_denominator"] == 4
-        assert variant_metrics["usable_vote_denominator"] == 4
-    assert event["metrics"]["variants"]["one"]["consensus_wins"] == 0
+    for candidate_metrics in event["metrics"]["candidates"]:
+        assert candidate_metrics["mean_error_severity_vote_denominator"] == 4
+        assert candidate_metrics["usable_vote_denominator"] == 4
+        assert candidate_metrics["consensus_wins"] == 0
+    assert event["metrics"]["no_strict_majority_sample_count"] == 1
 
 
 def test_rejects_duplicate_judgment_paths_and_boolean_severity(tmp_path: Path) -> None:

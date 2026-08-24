@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import re
 import subprocess
@@ -13,13 +14,17 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .event_journal import append_event, read_events
+from .event_journal import append_event
 from .fingerprint import (
     fingerprint_files,
     fingerprint_json,
     unique_fingerprint_paths,
 )
-from .journal_integrity import effective_sustained_invalidated_attempt_ids
+from .journal_integrity import (
+    SUSTAINED_START_EVENT,
+    SUSTAINED_TERMINAL_EVENTS,
+    read_sustained_journal_snapshot,
+)
 from .load_registry import find_candidate, load_json
 from .load_sustained_workload import (
     is_private_workload_class,
@@ -31,6 +36,15 @@ from .project_paths import (
     SUSTAINED_ARTIFACTS_PATH,
     SUSTAINED_EVENTS_PATH,
     SUSTAINED_REGISTRY_PATH,
+)
+from .private_records_commitment import (
+    PRIVATE_RECORDS_COMMITMENT_SCHEME,
+    PRIVATE_RECORDS_PROVENANCE_FIELDS,
+    create_private_records_commitment,
+    create_private_records_bytes_commitment,
+    decode_private_records_provenance_bytes,
+    verify_private_records_bytes_commitment,
+    verify_private_records_commitment,
 )
 from .resource_monitor import ProcessTreeMonitor
 from .terminate_process_tree import terminate_process_tree
@@ -84,13 +98,13 @@ def run_sustained_candidate(
             python,
             PROJECT_ROOT / candidate["verify_script"],
         )
-    events = read_events(SUSTAINED_EVENTS_PATH)
-    invalidated_attempt_ids = effective_sustained_invalidated_attempt_ids(
-        SUSTAINED_EVENTS_PATH
+    events, invalidated_attempt_ids, corrected_attempt_ids = (
+        read_sustained_journal_snapshot(SUSTAINED_EVENTS_PATH)
     )
+    excluded_attempt_ids = invalidated_attempt_ids | corrected_attempt_ids
     successful_keys = _successful_attempt_keys(
         events,
-        invalidated_attempt_ids=invalidated_attempt_ids,
+        invalidated_attempt_ids=excluded_attempt_ids,
     )
     private_candidate_artifact_dir = (
         SUSTAINED_ARTIFACTS_PATH / candidate_id
@@ -112,6 +126,10 @@ def run_sustained_candidate(
         PROJECT_ROOT / "src" / "local_inference_bench" / "load_registry.py",
         PROJECT_ROOT / "src" / "local_inference_bench" / "load_sustained_workload.py",
         PROJECT_ROOT / "src" / "local_inference_bench" / "project_paths.py",
+        PROJECT_ROOT
+        / "src"
+        / "local_inference_bench"
+        / "private_records_commitment.py",
         PROJECT_ROOT / "src" / "local_inference_bench" / "resource_monitor.py",
         PROJECT_ROOT / "src" / "local_inference_bench" / "terminate_process_tree.py",
         PROJECT_ROOT / "src" / "local_inference_bench" / "validate_public_summary.py",
@@ -172,11 +190,13 @@ def run_sustained_candidate(
                     "trial_index": trial_index,
                 }
             )
+            _verify_workload_content_bindings(workload)
             if private_candidate_artifact_dir is not None:
                 successful_keys.update(
                     _successful_private_artifact_attempt_keys(
                         private_candidate_artifact_dir,
-                        invalidated_attempt_ids=invalidated_attempt_ids,
+                        sustained_events=events,
+                        invalidated_attempt_ids=excluded_attempt_ids,
                         expected_bindings={
                             attempt_key: {
                                 "protocol": registry["protocol"],
@@ -185,6 +205,7 @@ def run_sustained_candidate(
                                 "config": config,
                                 "config_index": config_index,
                                 "phase": phase,
+                                "target_wall_seconds": target_wall_seconds,
                                 "trial_index": trial_index,
                                 "workload_class": workload["workload_class"],
                                 "workload_fingerprint": workload["fingerprint"],
@@ -196,6 +217,10 @@ def run_sustained_candidate(
                                 "execution_policy_fingerprint": (
                                     execution_policy_fingerprint
                                 ),
+                                "journal_workload": workload["public_summary"],
+                                "expected_sample_ids": [
+                                    item["id"] for item in workload["items"]
+                                ],
                             }
                         },
                     )
@@ -273,13 +298,16 @@ def _successful_attempt_keys(
         if is_complete:
             successful_keys.add(event["attempt_key"])
     return successful_keys
+
+
 def _successful_private_artifact_attempt_keys(
     candidate_artifact_dir: Path,
     *,
+    sustained_events: list[dict],
     invalidated_attempt_ids: set[str],
     expected_bindings: dict[str, dict],
 ) -> set[str]:
-    """Return only hash-bound private artifacts matching current attempt inputs."""
+    """Return only journal-committed private artifacts matching current inputs."""
 
     successful_keys = set()
     if not candidate_artifact_dir.is_dir() or not expected_bindings:
@@ -288,10 +316,10 @@ def _successful_private_artifact_attempt_keys(
         "*/records-provenance.json"
     ):
         try:
-            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if not isinstance(provenance, dict):
+            provenance = decode_private_records_provenance_bytes(
+                provenance_path.read_bytes()
+            )
+        except (OSError, ValueError):
             continue
         attempt_key = provenance.get("attempt_key")
         if type(attempt_key) is not str:
@@ -299,20 +327,43 @@ def _successful_private_artifact_attempt_keys(
         expected = expected_bindings.get(attempt_key)
         if expected is None:
             continue
+        raw_expected_sample_ids = expected.get("expected_sample_ids")
+        if (
+            not isinstance(raw_expected_sample_ids, list)
+            or not raw_expected_sample_ids
+            or any(type(sample_id) is not str for sample_id in raw_expected_sample_ids)
+            or len(raw_expected_sample_ids) != len(set(raw_expected_sample_ids))
+        ):
+            continue
         records_path = provenance_path.with_name("private-records.jsonl")
         attempt_id = provenance.get("attempt_id")
         workload_class = provenance.get("workload_class")
         declared_records_sha256 = provenance.get("records_sha256")
+        start_events = [
+            (position, event)
+            for position, event in enumerate(sustained_events)
+            if event.get("attempt_id") == attempt_id
+            and event.get("event") == SUSTAINED_START_EVENT
+        ]
+        terminal_events = [
+            (position, event)
+            for position, event in enumerate(sustained_events)
+            if event.get("attempt_id") == attempt_id
+            and event.get("event") in SUSTAINED_TERMINAL_EVENTS
+        ]
         try:
             canonical_attempt_id = str(uuid.UUID(attempt_id))
         except (ValueError, TypeError, AttributeError):
             continue
+        journal_workload = expected.get("journal_workload")
         expected_fields_match = all(
-            provenance.get(key) == expected_value
+            _json_values_equal(provenance.get(key), expected_value)
             for key, expected_value in expected.items()
+            if key not in {"journal_workload", "expected_sample_ids"}
         )
         if (
-            provenance.get("schema_version") != 1
+            type(provenance.get("schema_version")) is not int
+            or provenance["schema_version"] != 1
             or provenance.get("status") != "succeeded"
             or canonical_attempt_id != attempt_id
             or provenance_path.parent.name != attempt_id
@@ -324,15 +375,221 @@ def _successful_private_artifact_attempt_keys(
             or not records_path.is_file()
             or type(declared_records_sha256) is not str
             or re.fullmatch(r"[0-9a-f]{64}", declared_records_sha256) is None
+            or len(start_events) != 1
+            or len(terminal_events) != 1
+            or start_events[0][0] >= terminal_events[0][0]
         ):
             continue
         try:
-            records_sha256 = _sha256(records_path)
-        except OSError:
+            with records_path.open("rb") as handle:
+                records_bytes = handle.read(64 * 1024 * 1024 + 1)
+            if len(records_bytes) > 64 * 1024 * 1024:
+                continue
+            records_sha256 = hashlib.sha256(records_bytes).hexdigest()
+            record_counts = _validate_private_records(
+                records_bytes,
+                task=provenance["task"],
+                phase=provenance["phase"],
+                expected_sample_ids=set(raw_expected_sample_ids),
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
             continue
-        if records_sha256 == declared_records_sha256:
-            successful_keys.add(attempt_key)
+        start = start_events[0][1]
+        terminal = terminal_events[0][1]
+        result = terminal.get("result")
+        journal_identity_fields = (
+            "protocol",
+            "candidate_id",
+            "task",
+            "config",
+            "config_index",
+            "phase",
+            "target_wall_seconds",
+            "trial_index",
+            "code_fingerprint",
+            "environment_fingerprint",
+            "controller_environment_fingerprint",
+            "execution_policy_fingerprint",
+        )
+        lifecycle_identity_matches = all(
+            event.get("attempt_id") == attempt_id
+            and all(
+                _json_values_equal(event.get(key), provenance.get(key))
+                for key in journal_identity_fields
+            )
+            and _json_values_equal(event.get("workload"), journal_workload)
+            and "attempt_key" not in event
+            and "workload_fingerprint" not in event
+            and event.get("private_records_commitment_scheme")
+            == PRIVATE_RECORDS_COMMITMENT_SCHEME
+            for event in (start, terminal)
+        )
+        counts = result.get("counts") if isinstance(result, dict) else None
+        if (
+            records_sha256 != declared_records_sha256
+            or record_counts["attempted"] <= 0
+            or not lifecycle_identity_matches
+            or terminal.get("event") != "sustained_attempt_succeeded"
+            or terminal.get("private_records_commitment_scheme")
+            != PRIVATE_RECORDS_COMMITMENT_SCHEME
+            or not isinstance(result, dict)
+            or result.get("status") != "complete"
+            or result.get("candidate_id") != provenance.get("candidate_id")
+            or result.get("task") != provenance.get("task")
+            or result.get("workload_class") != workload_class
+            or not isinstance(counts, dict)
+            or type(counts.get("attempted")) is not int
+            or type(counts.get("completed")) is not int
+            or type(counts.get("failed")) is not int
+            or counts.get("attempted") != record_counts["attempted"]
+            or counts.get("completed") != record_counts["completed"]
+            or counts.get("failed") != record_counts["failed"]
+            or record_counts["failed"] != 0
+        ):
+            continue
+        try:
+            verify_private_records_bytes_commitment(
+                records_bytes,
+                provenance,
+                records_sha256=declared_records_sha256,
+                private_commitment=provenance.get("private_records_commitment"),
+                public_commitment=terminal.get("private_artifact_commitment"),
+            )
+        except (OSError, ValueError):
+            continue
+        successful_keys.add(attempt_key)
     return successful_keys
+
+
+def _validate_private_records(
+    records_bytes: bytes,
+    *,
+    task: str,
+    phase: str,
+    expected_sample_ids: set[str],
+) -> dict[str, int]:
+    """Validate the exact worker record snapshot and return public counts."""
+
+    if (
+        type(records_bytes) is not bytes
+        or task not in {"asr", "ocr"}
+        or phase not in {"screen", "sustained", "quality", "compatibility"}
+        or not isinstance(expected_sample_ids, set)
+        or not expected_sample_ids
+        or any(type(sample_id) is not str or not sample_id for sample_id in expected_sample_ids)
+    ):
+        raise ValueError("private records are invalid")
+    try:
+        lines = records_bytes.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ValueError("private records are invalid") from error
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate private record key")
+            result[key] = value
+        return result
+
+    def reject_constant(_constant: str):
+        raise ValueError("non-finite private record number")
+
+    def parse_finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("non-finite private record number")
+        return parsed
+
+    attempted = 0
+    completed = 0
+    seen_quality_ids: set[str] = set()
+    total_output_characters = 0
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        attempted += 1
+        if attempted > 100_000:
+            raise ValueError("private record count budget exceeded")
+        try:
+            record = json.loads(
+                line,
+                object_pairs_hook=reject_duplicate_keys,
+                parse_constant=reject_constant,
+                parse_float=parse_finite_float,
+            )
+        except (json.JSONDecodeError, RecursionError, ValueError) as error:
+            raise ValueError(f"private record line {line_number} is invalid") from error
+        if not isinstance(record, dict):
+            raise ValueError(f"private record line {line_number} is invalid")
+        sample_id = record.get("sample_id")
+        success = record.get("success")
+        if (
+            type(sample_id) is not str
+            or sample_id not in expected_sample_ids
+            or type(success) is not bool
+        ):
+            raise ValueError(f"private record line {line_number} is invalid")
+        if phase in {"quality", "compatibility"}:
+            if sample_id in seen_quality_ids:
+                raise ValueError("private quality records repeat a sample id")
+            seen_quality_ids.add(sample_id)
+        captures_predictions = phase in {"quality", "compatibility"}
+        if task == "asr" and (
+            (captures_predictions and success) or "prediction" in record
+        ):
+            prediction = record.get("prediction")
+            if type(prediction) is not str or len(prediction) > 200_000:
+                raise ValueError(f"private record line {line_number} is invalid")
+            total_output_characters += len(prediction)
+            if total_output_characters > 2_000_000:
+                raise ValueError("private ASR record text budget exceeded")
+        if task == "ocr" and (
+            (captures_predictions and success) or "lines" in record
+        ):
+            output_lines = record.get("lines")
+            if not isinstance(output_lines, list) or len(output_lines) > 10_000:
+                raise ValueError(f"private record line {line_number} is invalid")
+            for output_line in output_lines:
+                text = output_line.get("text") if isinstance(output_line, dict) else None
+                if type(text) is not str or len(text) > 10_000:
+                    raise ValueError(f"private record line {line_number} is invalid")
+                total_output_characters += len(text)
+                if total_output_characters > 1_000_000:
+                    raise ValueError("private OCR record text budget exceeded")
+        completed += success
+
+    if attempted == 0:
+        raise ValueError("private records are empty")
+    if (
+        phase in {"quality", "compatibility"}
+        and seen_quality_ids != expected_sample_ids
+    ):
+        raise ValueError("private quality records do not cover the workload")
+    return {
+        "attempted": attempted,
+        "completed": completed,
+        "failed": attempted - completed,
+    }
+
+
+def _json_values_equal(left: object, right: object) -> bool:
+    try:
+        return json.dumps(
+            left,
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        ) == json.dumps(
+            right,
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _artifact_files(candidate: dict, config: dict) -> list[str]:
@@ -401,7 +658,7 @@ def _capture_environment_fingerprint(python: Path, script: Path) -> str:
         raise RuntimeError("candidate environment identity capture failed")
     try:
         identity = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, RecursionError) as error:
         raise RuntimeError("candidate environment identity was invalid") from error
     return fingerprint_json(identity)
 
@@ -707,7 +964,9 @@ def _run_attempt(
         common=common,
         response_path=response_path,
         private_records_path=private_records_path,
+        workload=workload,
         workload_fingerprint=workload["fingerprint"],
+        expected_sample_ids={item["id"] for item in workload["items"]},
         exit_code=exit_code,
         failure_kind=failure_kind,
         wall_seconds=wall_seconds,
@@ -804,7 +1063,9 @@ def _record_attempt_outcome(
     common: dict,
     response_path: Path,
     private_records_path: Path,
+    workload: dict,
     workload_fingerprint: str,
+    expected_sample_ids: set[str],
     exit_code: int,
     failure_kind: str | None,
     wall_seconds: float,
@@ -813,6 +1074,12 @@ def _record_attempt_outcome(
 ) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     public_summary = None
+    private_artifact_commitment = None
+    try:
+        _verify_workload_content_bindings(workload)
+    except ValueError:
+        if failure_kind is None:
+            failure_kind = "workload_content_changed"
     if failure_kind is None and exit_code == 0 and response_path.is_file():
         try:
             response = json.loads(response_path.read_text(encoding="utf-8"))
@@ -825,17 +1092,26 @@ def _record_attempt_outcome(
                 phase=common["phase"],
                 config=common["config"],
             )
-        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
+            json.JSONDecodeError,
+            RecursionError,
+        ):
             failure_kind = "invalid_response"
     elif failure_kind is None and exit_code == 0:
         failure_kind = "missing_response"
     if public_summary is not None and failure_kind is None:
         try:
-            _write_records_provenance(
+            private_artifact_commitment = _write_records_provenance(
                 private_records_path,
                 common,
                 workload_fingerprint=workload_fingerprint,
                 result_status=public_summary["status"],
+                public_counts=public_summary["counts"],
+                expected_sample_ids=expected_sample_ids,
             )
         except (FileNotFoundError, OSError, TypeError, ValueError):
             failure_kind = "invalid_private_records"
@@ -861,6 +1137,8 @@ def _record_attempt_outcome(
                 if result_status == "partial_failure"
                 else "all_items_failed"
             )
+        if is_private_workload_class(common["workload"]["workload_class"]):
+            event["private_artifact_commitment"] = private_artifact_commitment
         append_event(
             SUSTAINED_EVENTS_PATH,
             event,
@@ -888,6 +1166,9 @@ def _public_attempt_common(common: dict) -> dict:
     if is_private_workload_class(common["workload"]["workload_class"]):
         public_common.pop("attempt_key", None)
         public_common.pop("workload_fingerprint", None)
+        public_common["private_records_commitment_scheme"] = (
+            PRIVATE_RECORDS_COMMITMENT_SCHEME
+        )
     return public_common
 
 
@@ -897,7 +1178,9 @@ def _write_records_provenance(
     *,
     workload_fingerprint: str,
     result_status: str,
-) -> None:
+    public_counts: dict,
+    expected_sample_ids: set[str],
+) -> dict:
     if not private_records_path.is_file():
         raise FileNotFoundError("worker private records are missing")
     provenance_status = {
@@ -907,6 +1190,23 @@ def _write_records_provenance(
     }.get(result_status)
     if provenance_status is None:
         raise ValueError("worker result status is invalid")
+    with private_records_path.open("rb") as handle:
+        records_bytes = handle.read(64 * 1024 * 1024 + 1)
+    if len(records_bytes) > 64 * 1024 * 1024:
+        raise ValueError("worker private records exceed the byte budget")
+    record_counts = _validate_private_records(
+        records_bytes,
+        task=common["task"],
+        phase=common["phase"],
+        expected_sample_ids=expected_sample_ids,
+    )
+    if (
+        not isinstance(public_counts, dict)
+        or set(public_counts) != {"attempted", "completed", "failed"}
+        or any(type(public_counts.get(key)) is not int for key in record_counts)
+        or any(public_counts[key] != value for key, value in record_counts.items())
+    ):
+        raise ValueError("worker private record counts do not match the public summary")
     provenance = {
         "schema_version": 1,
         "protocol": common["protocol"],
@@ -918,6 +1218,7 @@ def _write_records_provenance(
         "config": common["config"],
         "config_index": common["config_index"],
         "phase": common["phase"],
+        "target_wall_seconds": common["target_wall_seconds"],
         "trial_index": common["trial_index"],
         "workload_class": common["workload"]["workload_class"],
         "workload_fingerprint": workload_fingerprint,
@@ -927,13 +1228,21 @@ def _write_records_provenance(
             "controller_environment_fingerprint"
         ],
         "execution_policy_fingerprint": common["execution_policy_fingerprint"],
-        "records_sha256": _sha256(private_records_path),
     }
-    private_records_path.with_name("records-provenance.json").write_text(
-        json.dumps(provenance, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
+    commitment = create_private_records_bytes_commitment(
+        records_bytes,
+        provenance,
     )
+    provenance["records_sha256"] = commitment["records_sha256"]
+    provenance["private_records_commitment"] = commitment["private"]
+    if set(provenance) != PRIVATE_RECORDS_PROVENANCE_FIELDS:
+        raise ValueError("worker private records provenance is invalid")
+    provenance_path = private_records_path.with_name("records-provenance.json")
+    with provenance_path.open("x", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(provenance, sort_keys=True, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return commitment["public"]
 
 
 def _sha256(path: Path) -> str:
@@ -942,3 +1251,61 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verify_workload_content_bindings(workload: dict) -> None:
+    """Fail if a worker input changed after the manifest snapshot was loaded."""
+
+    items = workload.get("items")
+    warmup = workload.get("warmup_item")
+    bindings = workload.get("item_content_bindings")
+    if (
+        not isinstance(items, list)
+        or not items
+        or not isinstance(warmup, dict)
+        or not isinstance(bindings, dict)
+    ):
+        raise ValueError("workload content bindings are invalid")
+    items_by_id = {}
+    for item in [*items, warmup]:
+        sample_id = item.get("id") if isinstance(item, dict) else None
+        path_value = item.get("path") if isinstance(item, dict) else None
+        if (
+            type(sample_id) is not str
+            or type(path_value) is not str
+            or (sample_id in items_by_id and items_by_id[sample_id] != path_value)
+        ):
+            raise ValueError("workload content bindings are invalid")
+        items_by_id[sample_id] = path_value
+    if set(bindings) != set(items_by_id):
+        raise ValueError("workload content bindings are invalid")
+    for sample_id, path_value in items_by_id.items():
+        binding = bindings.get(sample_id)
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != {"content_sha256", "size_bytes"}
+            or type(binding.get("content_sha256")) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", binding["content_sha256"]) is None
+            or type(binding.get("size_bytes")) is not int
+            or binding["size_bytes"] < 0
+        ):
+            raise ValueError("workload content bindings are invalid")
+        path = Path(path_value)
+        try:
+            initial = path.stat()
+            size_bytes = 0
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    size_bytes += len(chunk)
+                    digest.update(chunk)
+            final = path.stat()
+        except OSError as error:
+            raise ValueError("workload content changed after manifest load") from error
+        if (
+            initial.st_size != final.st_size
+            or initial.st_mtime_ns != final.st_mtime_ns
+            or size_bytes != binding["size_bytes"]
+            or digest.hexdigest() != binding["content_sha256"]
+        ):
+            raise ValueError("workload content changed after manifest load")

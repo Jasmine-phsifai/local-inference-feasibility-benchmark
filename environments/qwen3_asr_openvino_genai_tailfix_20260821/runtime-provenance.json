@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "profile_id": "openvino_genai_tailfix_20260821",
+  "environment_name": "local-bench-qwen3-asr-openvino-genai-tailfix-20260821",
+  "python_version": "3.11.15",
+  "package_versions": {
+    "numpy": "2.4.6",
+    "openvino": "2026.4.0.dev20260821",
+    "openvino-genai": "2026.4.0.0.dev20260821",
+    "openvino-telemetry": "2025.2.0",
+    "openvino-tokenizers": "2026.4.0.0.dev20260821",
+    "packaging": "26.3",
+    "pip": "26.1.2",
+    "setuptools": "83.0.0",
+    "wheel": "0.47.0"
+  },
+  "openvino_genai_product_version": "2026.4.0.0-3387-98ae8c32197",
+  "source_repository": "https://github.com/openvinotoolkit/openvino.genai.git",
+  "stable_source_revision": "bd8d6542e3ca1ac30042d5d8d4202ce00b5f4af0",
+  "associated_source_revision": "98ae8c32197d1afe88ebaff89968283493c25786",
+  "required_fix_revision": "0d35ded5bac2d39bf45d52cbc7156c087f50c80d",
+  "source_checkout": "data/vendor/openvino.genai-tail-fix-source",
+  "wheel_artifacts": {
+    "openvino": {
+      "filename": "openvino-2026.4.0.dev20260821-22849-cp311-cp311-win_amd64.whl",
+      "url": "https://storage.openvinotoolkit.org/wheels/nightly/openvino/openvino-2026.4.0.dev20260821-22849-cp311-cp311-win_amd64.whl",
+      "size_bytes": 83366994,
+      "sha256": "ffc445f117dd210d46e26704066a8f140f4bc54caad9ff65455038a4849697d2"
+    },
+    "openvino-genai": {
+      "filename": "openvino_genai-2026.4.0.0.dev20260821-2617-cp311-cp311-win_amd64.whl",
+      "url": "https://storage.openvinotoolkit.org/wheels/nightly/openvino-genai/openvino_genai-2026.4.0.0.dev20260821-2617-cp311-cp311-win_amd64.whl",
+      "size_bytes": 3761955,
+      "sha256": "abd3f5aad8f290995ea53b94612aa0462dae331921975657463eeaa7e1925cd4"
+    },
+    "openvino-tokenizers": {
+      "filename": "openvino_tokenizers-2026.4.0.0.dev20260821-py3-none-win_amd64.whl",
+      "url": "https://storage.openvinotoolkit.org/wheels/nightly/openvino-tokenizers/openvino_tokenizers-2026.4.0.0.dev20260821-py3-none-win_amd64.whl",
+      "size_bytes": 1544778,
+      "sha256": "54d3881cb869ddeb5c0730f035ddf330360154f1b7f88c0c3ec1ef8078a35f2b"
+    }
+  }
+}

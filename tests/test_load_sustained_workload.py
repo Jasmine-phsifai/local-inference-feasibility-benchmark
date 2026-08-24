@@ -350,3 +350,15 @@ def _legacy_v2_fingerprint(workload: dict) -> str:
         digest.update(str(item["expected_speech"]).encode("ascii"))
         digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def test_excessively_nested_manifest_is_rejected_as_invalid(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    nested = "[" * 10_000 + "0" + "]" * 10_000
+    manifest_path.write_text(
+        '{"schema_version":1,"task":"asr","items":' + nested + "}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="manifest is invalid"):
+        load_sustained_workload(manifest_path, expected_task="asr")

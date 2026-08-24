@@ -1,0 +1,9 @@
+numpy==2.4.6
+openvino==2026.4.0.dev20260821
+openvino-genai==2026.4.0.0.dev20260821
+openvino-telemetry==2025.2.0
+openvino-tokenizers==2026.4.0.0.dev20260821
+packaging==26.3
+pip==26.1.2
+setuptools==83.0.0
+wheel==0.47.0

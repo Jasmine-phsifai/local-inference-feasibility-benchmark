@@ -129,6 +129,7 @@ def build_blind_packet(
     *,
     sample_count: int,
     seed: int,
+    verified_image_bindings: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict, dict]:
     if workload.get("task") != "ocr":
         raise ValueError("blind comparison requires an OCR workload")
@@ -157,10 +158,26 @@ def build_blind_packet(
         image_path = item.get("path")
         if not isinstance(sample_id, str) or not isinstance(image_path, str):
             raise ValueError("workload item is missing an opaque ID or path")
-        resolved_image_path = Path(image_path)
-        if not resolved_image_path.is_absolute() or not resolved_image_path.is_file():
-            raise ValueError("blind comparison requires resolved workload images")
-        image_sha256 = _sha256(resolved_image_path)
+        if verified_image_bindings is None:
+            resolved_image_path = Path(image_path)
+            if not resolved_image_path.is_absolute() or not resolved_image_path.is_file():
+                raise ValueError("blind comparison requires resolved workload images")
+            image_sha256 = _sha256(resolved_image_path)
+        else:
+            binding = verified_image_bindings.get(sample_id)
+            if (
+                not isinstance(binding, dict)
+                or set(binding) != {"path", "content_sha256"}
+                or type(binding.get("path")) is not str
+                or not binding["path"]
+                or not Path(binding["path"]).is_absolute()
+                or type(binding.get("content_sha256")) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", binding["content_sha256"])
+                is None
+            ):
+                raise ValueError("verified blind image binding is invalid")
+            resolved_image_path = Path(binding["path"])
+            image_sha256 = binding["content_sha256"]
         labels = ["A", "B"]
         randomized_variants = list(variant_ids)
         rng.shuffle(randomized_variants)

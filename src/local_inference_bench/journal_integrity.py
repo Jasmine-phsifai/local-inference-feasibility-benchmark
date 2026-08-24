@@ -9,11 +9,24 @@ and score events themselves cannot be hidden by that mechanism.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from hashlib import sha256
 from math import isfinite
 from pathlib import Path
 from typing import Iterable
+
+from .asr_agreement_public_protocol import (
+    PROTOCOL as ASR_AGREEMENT_PROTOCOL,
+    validate_public_event as validate_asr_agreement_event,
+)
+from .event_journal import read_journal_bytes
+from .fingerprint import fingerprint_json
+from .verified_blind_ocr_protocol import (
+    PROTOCOL as VERIFIED_BLIND_OCR_PROTOCOL,
+    validate_preparation_event,
+    validate_score_event,
+)
 
 
 SUSTAINED_START_EVENT = "sustained_attempt_started"
@@ -113,6 +126,14 @@ class AttemptLifecycle:
     terminals: dict[str, tuple[JournalRecord, ...]]
 
 
+@dataclass(frozen=True)
+class SustainedJournalSnapshot:
+    events: tuple[dict, ...]
+    invalidated_attempt_ids: frozenset[str]
+    corrected_attempt_ids: frozenset[str]
+    contents_sha256: str
+
+
 HistoricalLegacyConfig = tuple[str, str]
 
 
@@ -174,6 +195,55 @@ def effective_sustained_invalidated_attempt_ids(path: Path) -> set[str]:
     """Return invalidated ids only after their correction rows validate."""
 
     records, issues = _read_journal(path)
+    return _effective_sustained_invalidated_attempt_ids(records, issues)
+
+
+def read_sustained_journal_snapshot(
+    path: Path,
+) -> tuple[list[dict], set[str], set[str]]:
+    """Return events, invalidations, and corrected ids from one byte snapshot."""
+
+    snapshot = capture_sustained_journal_snapshot(path)
+    return (
+        list(snapshot.events),
+        set(snapshot.invalidated_attempt_ids),
+        set(snapshot.corrected_attempt_ids),
+    )
+
+
+def capture_sustained_journal_snapshot(path: Path) -> SustainedJournalSnapshot:
+    """Capture one writer-coherent sustained authority snapshot with its digest."""
+
+    contents = read_journal_bytes(path)
+    records, issues = _read_journal(path, contents=contents)
+    invalidated = _effective_sustained_invalidated_attempt_ids(records, issues)
+    superseded_lines = _validated_superseded_lines(records, [])
+    correction_fields = {
+        "sustained_attempts_reclassified": "reclassified_attempt_ids",
+        "sustained_config_indices_reclassified": "reclassified_attempt_ids",
+    }
+    corrected = {
+        attempt_id
+        for record in records
+        if record.line_number not in superseded_lines
+        for target_field in [correction_fields.get(record.event.get("event"))]
+        if target_field is not None
+        and isinstance(record.event.get(target_field), list)
+        for attempt_id in record.event[target_field]
+        if type(attempt_id) is str and attempt_id
+    }
+    return SustainedJournalSnapshot(
+        events=tuple(record.event for record in records),
+        invalidated_attempt_ids=frozenset(invalidated),
+        corrected_attempt_ids=frozenset(corrected),
+        contents_sha256=sha256(contents).hexdigest(),
+    )
+
+
+def _effective_sustained_invalidated_attempt_ids(
+    records: list[JournalRecord],
+    issues: list[JournalIssue],
+) -> set[str]:
     superseded_lines = _validated_superseded_lines(records, issues)
     active_invalidation_targets = {
         attempt_id
@@ -283,6 +353,23 @@ def validate_repository_journals(
         issues=issues,
         require_replacement_timestamp=True,
     )
+    _validate_asr_agreement_score_events(
+        quality_records,
+        quality_superseded,
+        sustained_candidates,
+        issues,
+    )
+    _validate_blind_ocr_preparation_events(
+        quality_records,
+        quality_superseded,
+        issues,
+    )
+    _validate_blind_ocr_score_events(
+        quality_records,
+        quality_superseded,
+        sustained_candidates,
+        issues,
+    )
     _validate_event_replacements(
         bounded_records,
         correction_event="bounded_event_invalidated",
@@ -321,12 +408,21 @@ def validate_repository_journals(
     )
 
 
-def _read_journal(path: Path) -> tuple[list[JournalRecord], list[JournalIssue]]:
+def _read_journal(
+    path: Path,
+    *,
+    contents: bytes | None = None,
+) -> tuple[list[JournalRecord], list[JournalIssue]]:
     issues: list[JournalIssue] = []
-    if not path.is_file():
-        return [], [JournalIssue(path, None, "journal_missing", "journal does not exist")]
-
-    contents = path.read_bytes()
+    if contents is None:
+        try:
+            contents = read_journal_bytes(path)
+        except FileNotFoundError:
+            return [], [JournalIssue(path, None, "journal_missing", "journal does not exist")]
+        except OSError as error:
+            return [], [
+                JournalIssue(path, None, "journal_unreadable", f"cannot read journal: {error}")
+            ]
     if contents and not contents.endswith(b"\n"):
         issues.append(
             JournalIssue(
@@ -372,7 +468,7 @@ def _read_journal(path: Path) -> tuple[list[JournalRecord], list[JournalIssue]]:
                 )
             )
             continue
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
             issues.append(
                 JournalIssue(path, line_number, "invalid_json", f"invalid UTF-8 JSON: {error}")
             )
@@ -424,7 +520,7 @@ def _read_candidate_registry(
             )
         )
         return {}
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         issues.append(
             JournalIssue(path, None, "invalid_registry", f"cannot read candidate registry: {error}")
         )
@@ -547,6 +643,233 @@ def _validated_superseded_lines(
         if valid:
             superseded.add(target_line)
     return frozenset(superseded)
+
+
+def _validate_asr_agreement_score_events(
+    records: list[JournalRecord],
+    superseded_lines: frozenset[int],
+    sustained_candidates: dict[str, dict],
+    issues: list[JournalIssue],
+) -> None:
+    seen_hashes: dict[str, JournalRecord] = {}
+    for record in records:
+        event = record.event
+        if (
+            record.line_number in superseded_lines
+            or event.get("event") != "asr_agreement_scored"
+            or event.get("protocol") != ASR_AGREEMENT_PROTOCOL
+        ):
+            continue
+        try:
+            score = validate_asr_agreement_event(
+                event,
+                source_matches_registry=lambda source: (
+                    _asr_score_source_matches_registry(
+                        source,
+                        sustained_candidates,
+                    )
+                ),
+            )
+        except ValueError as error:
+            _add_issue(
+                issues,
+                record,
+                "invalid_asr_agreement_score_event",
+                str(error),
+            )
+            continue
+
+        public_hash = score["public_event_sha256"]
+        previous_hash = seen_hashes.get(public_hash)
+        if previous_hash is not None:
+            _add_issue(
+                issues,
+                record,
+                "duplicate_asr_agreement_score_hash",
+                f"ASR agreement public hash already appears on line {previous_hash.line_number}",
+            )
+        else:
+            seen_hashes[public_hash] = record
+
+
+def _asr_score_source_matches_registry(
+    source: dict,
+    sustained_candidates: dict[str, dict],
+) -> bool:
+    candidate = sustained_candidates.get(source["candidate_id"])
+    config_index = source["config_index"]
+    if not isinstance(candidate, dict) or candidate.get("task") != "asr":
+        return False
+    configs = candidate.get("configs")
+    if not isinstance(configs, list) or config_index >= len(configs):
+        return False
+    config = configs[config_index]
+    return (
+        isinstance(config, dict)
+        and source["config_fingerprint"] == fingerprint_json(config)
+    )
+
+
+def _validate_blind_ocr_preparation_events(
+    records: list[JournalRecord],
+    superseded_lines: frozenset[int],
+    issues: list[JournalIssue],
+) -> None:
+    seen: dict[str, JournalRecord] = {}
+    for record in records:
+        if (
+            record.line_number in superseded_lines
+            or record.event.get("event") != "blind_ocr_packet_prepared"
+        ):
+            continue
+        try:
+            validate_preparation_event(record.event)
+        except ValueError as error:
+            _add_issue(
+                issues,
+                record,
+                "invalid_blind_ocr_preparation_event",
+                str(error),
+            )
+            continue
+        preparation_id = record.event.get("preparation_id")
+        try:
+            canonical_id = str(uuid.UUID(preparation_id))
+        except (ValueError, TypeError, AttributeError):
+            canonical_id = None
+        if canonical_id is None or canonical_id != preparation_id:
+            _add_issue(
+                issues,
+                record,
+                "invalid_blind_ocr_preparation_id",
+                "blind OCR preparation_id must be a canonical UUID",
+            )
+            continue
+        previous = seen.get(preparation_id)
+        if previous is not None:
+            _add_issue(
+                issues,
+                record,
+                "duplicate_blind_ocr_preparation_id",
+                f"blind OCR preparation_id already appears on line {previous.line_number}",
+            )
+            continue
+        seen[preparation_id] = record
+
+
+def _validate_blind_ocr_score_events(
+    records: list[JournalRecord],
+    superseded_lines: frozenset[int],
+    sustained_candidates: dict[str, dict],
+    issues: list[JournalIssue],
+) -> None:
+    preparations_by_hash: dict[str, list[JournalRecord]] = {}
+    for record in records:
+        if (
+            record.line_number in superseded_lines
+            or record.event.get("event") != "blind_ocr_packet_prepared"
+        ):
+            continue
+        try:
+            preparation = validate_preparation_event(record.event)
+        except ValueError:
+            continue
+        preparations_by_hash.setdefault(
+            preparation["public_event_sha256"],
+            [],
+        ).append(record)
+
+    seen_score_anchors: dict[str, JournalRecord] = {}
+    for record in records:
+        event = record.event
+        if (
+            record.line_number in superseded_lines
+            or event.get("event") != "blind_ocr_quality_scored"
+            or event.get("protocol") != VERIFIED_BLIND_OCR_PROTOCOL
+        ):
+            continue
+        try:
+            score = validate_score_event(event)
+        except ValueError as error:
+            _add_issue(
+                issues,
+                record,
+                "invalid_blind_ocr_score_event",
+                str(error),
+            )
+            continue
+        anchor = score["preparation_public_event_sha256"]
+        preparation_matches = preparations_by_hash.get(anchor, [])
+        if (
+            len(preparation_matches) != 1
+            or preparation_matches[0].line_number >= record.line_number
+        ):
+            _add_issue(
+                issues,
+                record,
+                "unresolved_blind_ocr_preparation_anchor",
+                "v10 score must reference exactly one earlier valid preparation event",
+            )
+        else:
+            preparation = preparation_matches[0].event
+            availability = score["metrics"]["source_record_availability"]
+            preparation_counts = preparation["selected_source_status_counts"]
+            if (
+                score["metrics"]["sample_count"] != preparation["sample_count"]
+                or availability["available_record_count"]
+                != preparation_counts["available"]
+                or availability["failed_record_count"]
+                != preparation_counts["failed"]
+                or availability["unavailable_record_count"]
+                != preparation_counts["unavailable"]
+            ):
+                _add_issue(
+                    issues,
+                    record,
+                    "blind_ocr_score_preparation_mismatch",
+                    "v10 score counts do not match its public preparation anchor",
+                )
+        previous = seen_score_anchors.get(anchor)
+        if previous is not None:
+            _add_issue(
+                issues,
+                record,
+                "duplicate_blind_ocr_score_anchor",
+                f"preparation anchor already has a score on line {previous.line_number}",
+            )
+        else:
+            seen_score_anchors[anchor] = record
+        for source in score["source_candidates"]:
+            if not _score_source_matches_registry(source, sustained_candidates):
+                _add_issue(
+                    issues,
+                    record,
+                    "blind_ocr_score_registry_mismatch",
+                    "v10 score source candidate/config is absent from the sustained registry",
+                )
+
+
+def _score_source_matches_registry(
+    source: dict,
+    sustained_candidates: dict[str, dict],
+) -> bool:
+    candidate = sustained_candidates.get(source["candidate_id"])
+    config_index = source["config_index"]
+    if not isinstance(candidate, dict) or candidate.get("task") != "ocr":
+        return False
+    configs = candidate.get("configs")
+    if (
+        not isinstance(configs, list)
+        or config_index >= len(configs)
+    ):
+        return False
+    config = configs[config_index]
+    if (
+        not isinstance(config, dict)
+        or source["config_fingerprint"] != fingerprint_json(config)
+    ):
+        return False
+    return True
 
 
 def _validate_attempt_lifecycle(
@@ -708,9 +1031,15 @@ def _validate_active_sustained_correction_conflicts(
         if (
             not isinstance(target_ids, list)
             or not target_ids
-            or not all(isinstance(attempt_id, str) and attempt_id for attempt_id in target_ids)
+            or not all(type(attempt_id) is str and attempt_id for attempt_id in target_ids)
             or len(target_ids) != len(set(target_ids))
         ):
+            _add_issue(
+                issues,
+                record,
+                "invalid_active_correction_targets",
+                f"{target_field} must be a nonempty list of unique nonempty strings",
+            )
             continue
         for attempt_id in target_ids:
             key = (event_name, attempt_id)

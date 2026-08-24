@@ -70,7 +70,10 @@ def score_asr_quality(
     records_path: Path,
     candidate_id: str,
 ) -> dict:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise ValueError("ASR quality manifest is invalid") from error
     if manifest.get("task") != "asr" or not isinstance(manifest.get("references"), dict):
         raise ValueError("ASR quality manifest requires a references mapping")
     if manifest.get("workload_class") != "generated_quality_control":
@@ -258,7 +261,12 @@ def _read_records(path: Path) -> dict[str, dict]:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
-            record = json.loads(line)
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, RecursionError) as error:
+                raise ValueError(
+                    f"invalid ASR quality record at line {line_number}"
+                ) from error
             if not isinstance(record, dict):
                 raise ValueError(f"invalid ASR quality record at line {line_number}")
             sample_id = record.get("sample_id")
@@ -295,7 +303,10 @@ def _verify_records_provenance(
     workload_fingerprint: str,
 ) -> dict:
     provenance_path = records_path.with_name("records-provenance.json")
-    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise ValueError("ASR quality records provenance is invalid") from error
     if (
         provenance.get("schema_version") != 1
         or provenance.get("protocol") != "sustained-process-v1"

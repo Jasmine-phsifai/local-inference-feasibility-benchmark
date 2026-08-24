@@ -502,7 +502,10 @@ def test_rejects_private_workload_and_unbounded_candidate_id(tmp_path: Path) -> 
         ({"required_terms": [{"aliases": ["x" * 257]}]}, "aliases"),
         ({"speech_intervals": "0-1"}, "speech intervals"),
         ({"speech_intervals": [[0.5, 0.25]]}, "speech interval"),
-        ({"speech_intervals": [[0.0, float("nan")]]}, "speech interval"),
+        (
+            {"speech_intervals": [[0.0, float("nan")]]},
+            "sustained workload manifest is invalid",
+        ),
         ({"expected_speech": False}, "speech expectation"),
     ],
 )
@@ -518,9 +521,8 @@ def test_rejects_malformed_reference_schema(
     document = json.loads(manifest_path.read_text(encoding="utf-8"))
     document["references"]["sample"].update(reference_update)
     manifest_path.write_text(json.dumps(document), encoding="utf-8")
-    _bind_records(manifest_path, records_path)
-
     with pytest.raises(ValueError, match=message):
+        _bind_records(manifest_path, records_path)
         score_asr_quality(
             manifest_path=manifest_path,
             records_path=records_path,

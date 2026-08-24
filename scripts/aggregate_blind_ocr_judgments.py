@@ -12,7 +12,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from local_inference_bench.event_journal import append_event
+from local_inference_bench.event_journal import append_event_once
+from local_inference_bench.fingerprint import fingerprint_json
+from local_inference_bench.load_registry import load_json
+from local_inference_bench.project_paths import SUSTAINED_REGISTRY_PATH
 from local_inference_bench.validate_public_summary import validate_public_summary
 
 
@@ -24,7 +27,7 @@ def main() -> None:
     args = parser.parse_args()
     event = aggregate_judgments(args.mapping, args.judgment)
     if args.append_journal is not None:
-        append_event(args.append_journal, event)
+        _append_public_event_once(args.append_journal, event)
     print(json.dumps(event, indent=2, sort_keys=True))
 
 
@@ -47,6 +50,10 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
         mapping.get("source_attempts"),
         variant_ids,
     )
+    registered_sources = _validated_registered_sources(source_attempts)
+    registered_source_by_variant = {
+        source["variant_id"]: source for source in registered_sources
+    }
     preparation_producer_sha256 = _validated_producer_sha256(
         mapping.get("preparation_producer_sha256"),
         expected_paths=_PREPARATION_PRODUCER_PATHS,
@@ -119,6 +126,8 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
     pairwise_agreements = 0
     pairwise_comparisons = 0
     consensus_wins = Counter()
+    consensus_tie_samples = 0
+    no_strict_majority_samples = 0
     for sample_id, private_sample in sample_mapping.items():
         identities = private_sample["identities"]
         sample_votes = []
@@ -151,8 +160,12 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
             unanimous_samples += 1
         if top_count > len(judgments) / 2:
             strict_majority_samples += 1
-            if top_value != "tie":
+            if top_value == "tie":
+                consensus_tie_samples += 1
+            else:
                 consensus_wins[top_value] += 1
+        else:
+            no_strict_majority_samples += 1
 
     record_status_counts = {
         variant_id: {status: 0 for status in sorted(_RECORD_STATUSES)}
@@ -174,9 +187,11 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
     )
     metrics = {
         "sample_count": len(sample_mapping),
-        "judge_count": len(judgments),
+        "judgment_file_count": len(judgments),
         "vote_count": len(sample_mapping) * len(judgments),
         "tie_vote_count": tie_votes,
+        "consensus_tie_sample_count": consensus_tie_samples,
+        "no_strict_majority_sample_count": no_strict_majority_samples,
         "strict_majority_sample_fraction": (
             strict_majority_samples / len(sample_mapping)
         ),
@@ -201,15 +216,18 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
             ),
         },
         "source_record_availability": {
-            "variant_sample_count": len(sample_mapping) * len(variant_ids),
+            "candidate_sample_count": len(sample_mapping) * len(variant_ids),
             "available_record_count": aggregate_record_status_counts["available"],
             "failed_record_count": aggregate_record_status_counts["failed"],
             "unavailable_record_count": aggregate_record_status_counts[
                 "unavailable"
             ],
         },
-        "variants": {
-            variant_id: {
+        "candidates": [
+            {
+                "candidate_evidence_id": registered_source_by_variant[variant_id][
+                    "candidate_evidence_id"
+                ],
                 "win_votes": stats["wins"],
                 "consensus_wins": consensus_wins[variant_id],
                 "mean_error_severity": stats["severity_sum"] / stats["votes"],
@@ -217,19 +235,23 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
                 "mean_error_severity_vote_denominator": stats["votes"],
                 "usable_vote_denominator": stats["votes"],
             }
-            for variant_id, stats in variant_stats.items()
-        },
+            for variant_id, stats in sorted(
+                variant_stats.items(),
+                key=lambda item: registered_source_by_variant[item[0]][
+                    "candidate_evidence_id"
+                ],
+            )
+        ],
     }
-    return {
+    event = {
         "event": "blind_ocr_quality_scored",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "candidate_id": "private_course_blind_ocr_comparison",
         "protocol": _AGGREGATE_PROTOCOL,
         "workload_class": "private_course",
-        "judge_count": len(judgments),
-        "source_variants": [
+        "judgment_file_count": len(judgments),
+        "source_candidates": [
             {
-                "variant_id": source["variant_id"],
+                "candidate_evidence_id": source["candidate_evidence_id"],
                 "candidate_id": source["candidate_id"],
                 "config_index": source["config_index"],
                 "config_fingerprint": source["config_fingerprint"],
@@ -244,7 +266,7 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
                     source["variant_id"]
                 ]["unavailable"],
             }
-            for source in source_attempts
+            for source in registered_sources
         ],
         "producer_sha256": _combined_producer_sha256(
             preparation_producer_sha256
@@ -253,8 +275,10 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
         "interpretation": {
             "blind_judgment_is_not_ground_truth": True,
             "procedural_blinding_only": True,
-            "judge_independence_verified": False,
-            "mapping_commitment_verified": True,
+            "judge_identity_uniqueness_verified": False,
+            "semantic_independence_verified": False,
+            "mapping_commitment_locally_verified": True,
+            "mapping_access_restriction_verified": False,
             "private_fingerprints_published": False,
             "private_run_identifiers_published": False,
             "raw_text_or_images_published": False,
@@ -262,10 +286,43 @@ def aggregate_judgments(mapping_path: Path, judgment_paths: list[Path]) -> dict:
             "failed_or_unavailable_options_disclosed_to_judges": True,
             "failed_or_unavailable_record_counts_published": True,
             "winner_metrics_filter_to_fully_available_comparisons": False,
-            "fully_available_comparisons_reported_separately": True,
-            "semantic_duplicate_guard": True,
+            "fully_available_comparison_counts_reported": True,
+            "exact_judgment_payload_uniqueness_enforced": True,
+            "public_claim_level_deduplication": True,
+            "independent_replicates_not_identified_by_public_hash": True,
         },
     }
+    event["public_event_sha256"] = _public_event_sha256(event)
+    return {
+        **event,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _public_event_sha256(event: dict) -> str:
+    body = {
+        key: value
+        for key, value in event.items()
+        if key not in {"public_event_sha256", "timestamp_utc"}
+    }
+    serialized = json.dumps(
+        body,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _append_public_event_once(path: Path, event: dict) -> bool:
+    identity = event.get("public_event_sha256")
+    if (
+        type(identity) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", identity) is None
+        or not hmac.compare_digest(identity, _public_event_sha256(event))
+    ):
+        raise ValueError("blind OCR public event identity is invalid")
+    return append_event_once(path, event)
 
 
 def _load_judgment(
@@ -606,6 +663,86 @@ def _validated_source_attempts(value: object, variant_ids: list[str]) -> list[di
     return [by_variant[variant_id] for variant_id in sorted(by_variant)]
 
 
+def _validated_registered_sources(
+    source_attempts: list[dict],
+    *,
+    registry_path: Path = SUSTAINED_REGISTRY_PATH,
+) -> list[dict]:
+    if registry_path.stat().st_size > _MAX_REGISTRY_BYTES:
+        raise ValueError("blind sustained registry byte budget exceeded")
+    registry = load_json(registry_path)
+    candidates = registry.get("candidates") if isinstance(registry, dict) else None
+    if not isinstance(candidates, list):
+        raise ValueError("blind sustained registry is invalid")
+    registered = {
+        candidate.get("id"): candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("task") == "ocr"
+    }
+    if len(registered) != sum(
+        isinstance(candidate, dict) and candidate.get("task") == "ocr"
+        for candidate in candidates
+    ):
+        raise ValueError("blind sustained registry is invalid")
+
+    identities = set()
+    validated = []
+    for source in source_attempts:
+        candidate_id = source["candidate_id"]
+        config_index = source["config_index"]
+        candidate = registered.get(candidate_id)
+        if candidate is None:
+            raise ValueError("blind source candidate is not registered")
+        configs = candidate.get("configs")
+        retired_indices = candidate.get("retired_config_indices", [])
+        allowed_phases = candidate.get("allowed_phases")
+        config = (
+            configs[config_index]
+            if isinstance(configs, list) and config_index < len(configs)
+            else None
+        )
+        config_phases = config.get("phases") if isinstance(config, dict) else None
+        if (
+            str(candidate.get("status", "")).startswith("retired")
+            or not isinstance(configs, list)
+            or config_index >= len(configs)
+            or not isinstance(config, dict)
+            or config_index in retired_indices
+            or not hmac.compare_digest(
+                source["config_fingerprint"],
+                fingerprint_json(config),
+            )
+            or (
+                allowed_phases is not None
+                and (
+                    not isinstance(allowed_phases, list)
+                    or "quality" not in allowed_phases
+                )
+            )
+            or (
+                config_phases is not None
+                and (
+                    not isinstance(config_phases, list)
+                    or "quality" not in config_phases
+                )
+            )
+        ):
+            raise ValueError(
+                "blind source candidate/config does not match the registry"
+            )
+        identity = (candidate_id, config_index)
+        if identity in identities:
+            raise ValueError("blind sources require distinct candidate/config identities")
+        identities.add(identity)
+        validated.append(dict(source))
+
+    validated.sort(key=lambda source: (source["candidate_id"], source["config_index"]))
+    return [
+        {**source, "candidate_evidence_id": index}
+        for index, source in enumerate(validated, start=1)
+    ]
+
+
 def _validate_selected_record_status_counts(
     source_attempts: list[dict],
     record_status_counts: dict[str, dict[str, int]],
@@ -657,8 +794,17 @@ def _combined_producer_sha256(
     preparation_producer_sha256: dict[str, str],
 ) -> dict[str, str]:
     aggregation_producer_sha256 = _aggregation_producer_sha256()
-    if set(preparation_producer_sha256) & set(aggregation_producer_sha256):
-        raise ValueError("blind producer hash roles overlap")
+    overlapping_paths = set(preparation_producer_sha256) & set(
+        aggregation_producer_sha256
+    )
+    if any(
+        not hmac.compare_digest(
+            preparation_producer_sha256[path],
+            aggregation_producer_sha256[path],
+        )
+        for path in overlapping_paths
+    ):
+        raise ValueError("blind shared producer changed after packet preparation")
     return {
         **preparation_producer_sha256,
         **aggregation_producer_sha256,
@@ -678,7 +824,8 @@ _PUBLIC_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _BLIND_SAMPLE_ID = re.compile(r"^blind_[0-9]{3}$")
 _SOURCE_SAMPLE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _MAPPING_PROTOCOL = "private-ocr-blind-v6"
-_AGGREGATE_PROTOCOL = "private-ocr-blind-v8"
+_AGGREGATE_PROTOCOL = "private-ocr-blind-v9"
+_MAX_REGISTRY_BYTES = 2 * 1_048_576
 _PREPARATION_PRODUCER_PATHS = (
     "scripts/prepare_blind_ocr_comparison.py",
     "src/local_inference_bench/fingerprint.py",
@@ -686,6 +833,11 @@ _PREPARATION_PRODUCER_PATHS = (
 )
 _AGGREGATION_PRODUCER_PATHS = (
     "scripts/aggregate_blind_ocr_judgments.py",
+    "registries/sustained_candidates.json",
+    "src/local_inference_bench/event_journal.py",
+    "src/local_inference_bench/fingerprint.py",
+    "src/local_inference_bench/load_registry.py",
+    "src/local_inference_bench/project_paths.py",
     "src/local_inference_bench/validate_public_summary.py",
 )
 _PACKET_FIELDS = {

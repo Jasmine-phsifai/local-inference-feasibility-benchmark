@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
+import wave
 from importlib.metadata import version
 from pathlib import Path
 
@@ -22,8 +24,22 @@ except ModuleNotFoundError:
 
 SOURCE_REVISION = "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
 EXPORTER_REVISION = "f48d93fddff8c91e198389c47a6d5974789b67f4"
+NATIVE_MINIMUM_CHUNK_SECONDS = 0.5
 NATIVE_INTERNAL_CHUNK_SECONDS = 1200.0
 BENCHMARK_ITEM_LIMIT_SECONDS = 7200.0
+MEL_HOP_SAMPLES = 160
+ENCODER_CHUNK_FRAMES = 100
+TOKENS_PER_FULL_CHUNK = 13
+STABLE_ENVIRONMENT_NAME = "local-bench-qwen3-asr-openvino-genai-official"
+STABLE_PRODUCT_VERSION = "2026.3.0.0-3277-bd8d6542e3c"
+STABLE_RUNTIME_SOURCE_REVISION = (
+    "bd8d6542e3ca1ac30042d5d8d4202ce00b5f4af0"
+)
+STABLE_PACKAGE_VERSIONS = {
+    "openvino": "2026.3.0",
+    "openvino-genai": "2026.3.0.0",
+    "openvino-tokenizers": "2026.3.0.0",
+}
 
 
 def main() -> None:
@@ -49,6 +65,8 @@ def main() -> None:
     import openvino_genai
 
     project_root = Path(__file__).resolve().parents[1]
+    runtime_identity = _expected_runtime_identity(config, project_root)
+    _verify_installed_runtime(runtime_identity, openvino_genai)
     source_model = project_root / "data/models/qwen3-asr-0.6b-original"
     export_model = (
         project_root
@@ -139,7 +157,7 @@ def main() -> None:
         task="asr",
         runtime_name="openvino_genai_asr_pipeline",
         runtime_version=(
-            f"openvino-genai-{version('openvino-genai')}+"
+            f"openvino-genai-{runtime_identity['product_version']}+"
             f"openvino-{version('openvino')}"
         ),
         workload_class=request["workload"]["workload_class"],
@@ -162,12 +180,32 @@ def main() -> None:
         "native_internal_chunk_seconds": NATIVE_INTERNAL_CHUNK_SECONDS,
         "benchmark_item_limit_seconds": BENCHMARK_ITEM_LIMIT_SECONDS,
         "native_long_audio_chunking": True,
-        "post_release_tail_chunk_fix_present": False,
+        "post_release_tail_chunk_fix_present": runtime_identity[
+            "post_release_tail_chunk_fix_present"
+        ],
+        "runtime_identity_verified": True,
+        "runtime_profile_applied": config.get("runtime_profile") is not None,
+        "geometry_observation_count": sum(
+            type(record.get("encoder_remainder_frames")) is int
+            for record in records
+        ),
+        "encoder_remainder_frames_observed": sorted(
+            {
+                int(record["encoder_remainder_frames"])
+                for record in records
+                if type(record.get("encoder_remainder_frames")) is int
+            }
+        ),
+        "tail_fix_sensitive_item_count": sum(
+            record.get("tail_fix_sensitive_geometry") is True
+            for record in records
+        ),
         "official_with_past_export": True,
     }
     public_summary["model"] = {
         "model_revision": (
-            f"{SOURCE_REVISION}:optimum-intel:{EXPORTER_REVISION}:with-past"
+            f"{SOURCE_REVISION}:optimum-intel:{EXPORTER_REVISION}:with-past:"
+            f"ovgenai:{runtime_identity['associated_source_revision']}"
         ),
         "compute_type": "fp16_ir",
         "backend": "openvino_genai",
@@ -221,6 +259,10 @@ def _transcribe(
             Path(item["path"]),
             declared_duration_seconds=float(item["duration_seconds"]),
         )
+        tail_geometry = _single_native_chunk_tail_geometry(
+            len(audio),
+            duration_seconds=actual_duration_seconds,
+        )
         result = pipeline.generate(audio, generation_config)
         text = result.texts[0].strip() if result.texts else ""
         output_tokens = int(result.perf_metrics.get_num_generated_tokens())
@@ -266,6 +308,7 @@ def _transcribe(
         "perf_inference_milliseconds": _metric_mean(
             result.perf_metrics.get_inference_duration()
         ),
+        **tail_geometry,
     }
     if capture_prediction:
         record["prediction"] = text
@@ -277,34 +320,178 @@ def _read_audio(
     *,
     declared_duration_seconds: float,
 ):
-    import soundfile
-
-    info = soundfile.info(str(path))
-    if (
-        info.format != "WAV"
-        or info.subtype != "PCM_16"
-        or info.samplerate != 16000
-        or info.channels != 1
-    ):
-        raise ValueError("Qwen3-ASR input must be PCM16 mono 16 kHz WAV")
-    actual_duration_seconds = info.frames / info.samplerate
+    try:
+        with wave.open(str(path), "rb") as stream:
+            if (
+                stream.getnchannels() != 1
+                or stream.getsampwidth() != 2
+                or stream.getframerate() != 16_000
+                or stream.getcomptype() != "NONE"
+            ):
+                raise ValueError("Qwen3-ASR input must be PCM16 mono 16 kHz WAV")
+            frame_count = stream.getnframes()
+            frames = stream.readframes(frame_count)
+            if len(frames) != frame_count * 2 or stream.readframes(1):
+                raise ValueError("Qwen3-ASR WAV frame data is inconsistent")
+    except (OSError, EOFError, wave.Error) as error:
+        raise ValueError("Qwen3-ASR input must be a valid WAV") from error
+    if frame_count <= 0:
+        raise ValueError("Qwen3-ASR input WAV must contain audio frames")
+    actual_duration_seconds = frame_count / 16_000
     if actual_duration_seconds > BENCHMARK_ITEM_LIMIT_SECONDS:
         raise ValueError("Qwen3-ASR benchmark item exceeds the 7200-second limit")
     if not math.isclose(
         actual_duration_seconds,
         declared_duration_seconds,
         rel_tol=0.0,
-        abs_tol=1.0 / info.samplerate,
+        abs_tol=1.0 / 16_000,
     ):
         raise ValueError("Qwen3-ASR declared duration does not match the WAV")
-    audio, sample_rate = soundfile.read(
-        str(path),
-        dtype="float32",
-        always_2d=False,
-    )
-    if sample_rate != info.samplerate or len(audio) != info.frames:
+    import numpy
+
+    audio = numpy.frombuffer(frames, dtype="<i2").astype("float32") / 32768.0
+    if len(audio) != frame_count:
         raise ValueError("Qwen3-ASR decoded audio does not match its header")
     return audio, actual_duration_seconds
+
+
+def _mel_frame_count(sample_count: int) -> int:
+    """Match the official extractor's floor(sample_count / 160) geometry."""
+
+    if type(sample_count) is not int or sample_count <= 0:
+        raise ValueError("Qwen3-ASR sample count must be a positive integer")
+    return sample_count // MEL_HOP_SAMPLES
+
+
+def _tail_output_token_counts(remainder_frames: int) -> tuple[int, int]:
+    if (
+        type(remainder_frames) is not int
+        or not 0 <= remainder_frames < ENCODER_CHUNK_FRAMES
+    ):
+        raise ValueError("Qwen3-ASR remainder frames must be in [0, 100)")
+    if remainder_frames == 0:
+        return 0, 0
+    legacy = (
+        remainder_frames * TOKENS_PER_FULL_CHUNK
+        + ENCODER_CHUNK_FRAMES
+        - 1
+    ) // ENCODER_CHUNK_FRAMES
+    fixed = remainder_frames
+    for _ in range(3):
+        fixed = (fixed + 1) // 2
+    return legacy, fixed
+
+
+def _single_native_chunk_tail_geometry(
+    sample_count: int,
+    *,
+    duration_seconds: float,
+) -> dict[str, int | bool]:
+    """Report whole-input geometry only when the runtime keeps one native chunk."""
+
+    if (
+        not math.isfinite(duration_seconds)
+        or duration_seconds < NATIVE_MINIMUM_CHUNK_SECONDS
+        or duration_seconds > NATIVE_INTERNAL_CHUNK_SECONDS
+    ):
+        return {}
+    mel_frame_count = _mel_frame_count(sample_count)
+    encoder_remainder_frames = mel_frame_count % ENCODER_CHUNK_FRAMES
+    legacy_tail_tokens, fixed_tail_tokens = _tail_output_token_counts(
+        encoder_remainder_frames
+    )
+    return {
+        "mel_frame_count": mel_frame_count,
+        "encoder_remainder_frames": encoder_remainder_frames,
+        "tail_fix_sensitive_geometry": legacy_tail_tokens != fixed_tail_tokens,
+    }
+
+
+def _expected_runtime_identity(config: dict, project_root: Path) -> dict:
+    base_config_keys = {
+        "processes",
+        "device",
+        "threads_per_process",
+        "max_new_tokens",
+    }
+    runtime_profile = config.get("runtime_profile")
+    if runtime_profile is None:
+        if set(config) != base_config_keys:
+            raise ValueError("Qwen3-ASR stable runtime config changed")
+        return {
+            "profile_id": "openvino_genai_stable_2026_3_0",
+            "environment_name": STABLE_ENVIRONMENT_NAME,
+            "package_versions": STABLE_PACKAGE_VERSIONS,
+            "product_version": STABLE_PRODUCT_VERSION,
+            "associated_source_revision": STABLE_RUNTIME_SOURCE_REVISION,
+            "post_release_tail_chunk_fix_present": False,
+        }
+
+    source_root = project_root / "src"
+    if str(source_root) not in sys.path:
+        sys.path.insert(0, str(source_root))
+    from local_inference_bench.qwen3_asr_tailfix_profile import (
+        TAILFIX_PROFILE_RELATIVE_PATH,
+        load_qwen3_asr_tailfix_profile,
+    )
+
+    if (
+        set(config) != base_config_keys | {"runtime_profile"}
+        or runtime_profile != TAILFIX_PROFILE_RELATIVE_PATH.as_posix()
+    ):
+        raise ValueError("Qwen3-ASR runtime profile is not pinned")
+    profile_path = (project_root / runtime_profile).resolve(strict=True)
+    if not profile_path.is_relative_to(project_root.resolve(strict=True)):
+        raise ValueError("Qwen3-ASR runtime profile escaped the project root")
+    profile = load_qwen3_asr_tailfix_profile(profile_path)
+    return {
+        "profile_id": profile["profile_id"],
+        "environment_name": profile["environment_name"],
+        "package_versions": profile["package_versions"],
+        "product_version": profile["openvino_genai_product_version"],
+        "associated_source_revision": profile["associated_source_revision"],
+        "post_release_tail_chunk_fix_present": _tail_fix_presence_from_identity(
+            profile["openvino_genai_product_version"],
+            profile["associated_source_revision"],
+        ),
+    }
+
+
+def _tail_fix_presence_from_identity(
+    product_version: str,
+    associated_source_revision: str,
+) -> bool:
+    known = {
+        (STABLE_PRODUCT_VERSION, STABLE_RUNTIME_SOURCE_REVISION): False,
+        (
+            "2026.4.0.0-3387-98ae8c32197",
+            "98ae8c32197d1afe88ebaff89968283493c25786",
+        ): True,
+    }
+    try:
+        return known[(product_version, associated_source_revision)]
+    except KeyError as error:
+        raise RuntimeError("Qwen3-ASR runtime source identity is not pinned") from error
+
+
+def _verify_installed_runtime(identity: dict, openvino_genai) -> None:
+    if Path(sys.prefix).name != identity["environment_name"]:
+        raise RuntimeError("Qwen3-ASR runtime environment changed")
+    for package, expected_version in identity["package_versions"].items():
+        if version(package) != expected_version:
+            raise RuntimeError("Qwen3-ASR runtime package version changed")
+    product_version = identity["product_version"]
+    if (
+        openvino_genai.__version__ != product_version
+        or openvino_genai.get_version() != product_version
+    ):
+        raise RuntimeError("Qwen3-ASR OpenVINO GenAI ProductVersion changed")
+    derived_fix_presence = _tail_fix_presence_from_identity(
+        product_version,
+        identity["associated_source_revision"],
+    )
+    if derived_fix_presence != identity["post_release_tail_chunk_fix_present"]:
+        raise RuntimeError("Qwen3-ASR tail-fix runtime identity is inconsistent")
 
 
 def _metric_mean(value) -> float:

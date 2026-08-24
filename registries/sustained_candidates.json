@@ -330,6 +330,41 @@
         {"processes": 1, "device": "CPU", "threads_per_process": 24, "max_new_tokens": 4096},
         {"processes": 1, "device": "GPU.0", "threads_per_process": 4, "max_new_tokens": 4096}
       ]
+    },
+    {
+      "id": "qwen3_asr_0_6b_openvino_genai_tailfix_20260821",
+      "task": "asr",
+      "environment": "local-bench-qwen3-asr-openvino-genai-tailfix-20260821",
+      "environment_manifest": "environments/qwen3_asr_openvino_genai_tailfix_20260821/requirements.lock.txt",
+      "verify_script": "scripts/verify_qwen3_asr_openvino_genai_tailfix_20260821_environment.py",
+      "setup_script": "scripts/prepare_qwen3_asr_openvino_genai_tailfix_20260821.ps1",
+      "fingerprint_files": [
+        "environments/qwen3_asr_openvino_genai_tailfix_20260821/runtime-provenance.json",
+        "scripts/compare_qwen3_asr_openvino_genai_tail_fix.py",
+        "scripts/prepare_qwen3_asr_openvino_genai_tailfix_20260821.ps1",
+        "scripts/prepare_qwen3_asr_openvino_genai_official.ps1",
+        "scripts/create_qwen3_asr_openvino_genai_official_environment.ps1",
+        "scripts/download_qwen3_asr_original_model.ps1",
+        "scripts/export_qwen3_asr_openvino_genai_official.py",
+        "workers/qwen3_asr_openvino_genai_export_manifest.py",
+        "src/local_inference_bench/qwen3_asr_tailfix_profile.py",
+        "src/local_inference_bench/verify_locked_environment.py"
+      ],
+      "artifact_files": [
+        "data/models/qwen3-asr-0.6b-openvino-genai-official-f48d93f/export-complete.json",
+        "data/models/qwen3-asr-0.6b-openvino-genai-official-f48d93f/official-export-provenance.json"
+      ],
+      "worker": "workers/qwen3_asr_openvino_genai_sustained_worker.py",
+      "allowed_phases": ["quality", "compatibility"],
+      "configs": [
+        {
+          "processes": 1,
+          "device": "CPU",
+          "threads_per_process": 24,
+          "max_new_tokens": 512,
+          "runtime_profile": "environments/qwen3_asr_openvino_genai_tailfix_20260821/runtime-provenance.json"
+        }
+      ]
     }
   ]
 }

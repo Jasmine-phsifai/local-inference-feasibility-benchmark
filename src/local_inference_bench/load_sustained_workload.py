@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -33,8 +34,33 @@ def is_private_workload_class(workload_class: object) -> bool:
 def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
     """Validate a local manifest and return resolved items plus an opaque digest."""
 
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("schema_version") != 1:
+    return load_sustained_workload_from_bytes(
+        path.read_bytes(),
+        manifest_path=path,
+        expected_task=expected_task,
+    )
+
+
+def load_sustained_workload_from_bytes(
+    manifest_bytes: bytes,
+    *,
+    manifest_path: Path,
+    expected_task: str,
+) -> dict:
+    """Validate one immutable manifest snapshot and resolve its local inputs."""
+
+    try:
+        document = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_nonfinite_json_constant,
+            parse_float=_parse_finite_json_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise ValueError("sustained workload manifest is invalid") from error
+    if not isinstance(document, dict):
+        raise ValueError("sustained workload manifest must be an object")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 1:
         raise ValueError("sustained workload schema_version must be 1")
     if document.get("task") != expected_task:
         raise ValueError("sustained workload task does not match candidate")
@@ -51,7 +77,7 @@ def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
         items.append(
             _load_item(
                 raw_item,
-                manifest_path=path,
+                manifest_path=manifest_path,
                 task=expected_task,
                 seen_ids=seen_ids,
             )
@@ -67,23 +93,27 @@ def load_sustained_workload(path: Path, *, expected_task: str) -> dict:
     else:
         warmup_item = _load_item(
             raw_warmup,
-            manifest_path=path,
+            manifest_path=manifest_path,
             task=expected_task,
             seen_ids=seen_ids,
         )
         fingerprint_items = [*items, warmup_item]
+    fingerprint, item_content_bindings = _fingerprint_items(
+        fingerprint_items,
+        task=expected_task,
+        workload_class=workload_class,
+        warmup_item_id=warmup_item["id"],
+    )
     total_duration = sum(item.get("duration_seconds", 0.0) for item in items)
     return {
         "task": expected_task,
         "workload_class": workload_class,
         "items": items,
         "warmup_item": warmup_item,
-        "fingerprint": _fingerprint_items(
-            fingerprint_items,
-            task=expected_task,
-            workload_class=workload_class,
-            warmup_item_id=warmup_item["id"],
-        ),
+        "fingerprint": fingerprint,
+        # Internal-only bindings let privacy-safe scorers prove that they decode
+        # the exact bytes included in the opaque workload fingerprint.
+        "item_content_bindings": item_content_bindings,
         "public_summary": {
             "workload_class": workload_class,
             "item_count": len(items),
@@ -153,7 +183,7 @@ def _fingerprint_items(
     task: str,
     workload_class: str,
     warmup_item_id: str,
-) -> str:
+) -> tuple[str, dict[str, dict[str, int | str]]]:
     fingerprint_identity = {
         "protocol": _WORKLOAD_FINGERPRINT_PROTOCOL,
         "task": task,
@@ -163,9 +193,14 @@ def _fingerprint_items(
         # process assignment and therefore the measured concurrency pattern.
         "items": [],
     }
+    item_content_bindings = {}
     for item in items:
         path = Path(item["path"])
         size_bytes, content_sha256 = _hash_file(path)
+        item_content_bindings[item["id"]] = {
+            "content_sha256": content_sha256,
+            "size_bytes": size_bytes,
+        }
         fingerprint_item = {
             "content_sha256": content_sha256,
             "id": item["id"],
@@ -192,7 +227,7 @@ def _fingerprint_items(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("ascii")
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(canonical).hexdigest(), item_content_bindings
 
 
 def _hash_file(path: Path) -> tuple[int, str]:
@@ -203,3 +238,23 @@ def _hash_file(path: Path) -> tuple[int, str]:
             size_bytes += len(chunk)
             digest.update(chunk)
     return size_bytes, digest.hexdigest()
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate sustained workload JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(constant: str):
+    raise ValueError(f"non-finite sustained workload JSON constant: {constant}")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite sustained workload JSON number: {value}")
+    return parsed

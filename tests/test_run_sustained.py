@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -58,6 +59,23 @@ def _common():
     }
 
 
+def _bound_outcome_workload(tmp_path: Path) -> dict:
+    input_path = tmp_path / "outcome-input.bin"
+    if not input_path.exists():
+        input_path.write_bytes(b"A")
+    content = input_path.read_bytes()
+    return {
+        "items": [{"id": "sample", "path": str(input_path)}],
+        "warmup_item": {"id": "sample", "path": str(input_path)},
+        "item_content_bindings": {
+            "sample": {
+                "content_sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            }
+        },
+    }
+
+
 def _minimal_attempt_kwargs() -> dict:
     return {
         "registry": {
@@ -96,6 +114,29 @@ def _minimal_attempt_kwargs() -> dict:
     }
 
 
+def test_workload_content_binding_gate_detects_same_size_replacement(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "sample.bin"
+    input_path.write_bytes(b"A")
+    workload = {
+        "items": [{"id": "sample", "path": str(input_path)}],
+        "warmup_item": {"id": "sample", "path": str(input_path)},
+        "item_content_bindings": {
+            "sample": {
+                "content_sha256": hashlib.sha256(b"A").hexdigest(),
+                "size_bytes": 1,
+            }
+        },
+    }
+
+    run_sustained._verify_workload_content_bindings(workload)
+    input_path.write_bytes(b"B")
+
+    with pytest.raises(ValueError, match="content changed"):
+        run_sustained._verify_workload_content_bindings(workload)
+
+
 def test_outcome_journal_uses_only_validated_public_summary(tmp_path, monkeypatch):
     events_path = tmp_path / "events.jsonl"
     monkeypatch.setattr(run_sustained, "SUSTAINED_EVENTS_PATH", events_path)
@@ -130,13 +171,18 @@ def test_outcome_journal_uses_only_validated_public_summary(tmp_path, monkeypatc
         encoding="utf-8",
     )
     private_records_path = tmp_path / "private-records.jsonl"
-    private_records_path.write_text("{}\n", encoding="utf-8")
+    private_records_path.write_text(
+        '{"sample_id":"sample","success":true}\n',
+        encoding="utf-8",
+    )
 
     run_sustained._record_attempt_outcome(
         common=_common(),
         response_path=response_path,
         private_records_path=private_records_path,
+        workload=_bound_outcome_workload(tmp_path),
         workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
         exit_code=0,
         failure_kind=None,
         wall_seconds=1.0,
@@ -150,6 +196,14 @@ def test_outcome_journal_uses_only_validated_public_summary(tmp_path, monkeypatc
     assert "attempt_key" not in event
     assert "transcript" not in serialized
     assert "lecture.wav" not in serialized
+    assert "key_hex" not in serialized
+    assert "records_sha256" not in serialized
+    assert event["private_records_commitment_scheme"] == (
+        run_sustained.PRIVATE_RECORDS_COMMITMENT_SCHEME
+    )
+    assert event["private_artifact_commitment"]["scheme"] == (
+        run_sustained.PRIVATE_RECORDS_COMMITMENT_SCHEME
+    )
     provenance = json.loads(
         (tmp_path / "records-provenance.json").read_text(encoding="utf-8")
     )
@@ -157,6 +211,173 @@ def test_outcome_journal_uses_only_validated_public_summary(tmp_path, monkeypatc
     assert provenance["records_sha256"] == run_sustained._sha256(
         private_records_path
     )
+    run_sustained.verify_private_records_commitment(
+        private_records_path,
+        provenance,
+        records_sha256=provenance["records_sha256"],
+        private_commitment=provenance["private_records_commitment"],
+        public_commitment=event["private_artifact_commitment"],
+    )
+
+
+def test_post_worker_input_replacement_is_journaled_as_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setattr(run_sustained, "SUSTAINED_EVENTS_PATH", events_path)
+    workload = _bound_outcome_workload(tmp_path)
+    Path(workload["items"][0]["path"]).write_bytes(b"B")
+    response_path = tmp_path / "response.json"
+    response_path.write_text(
+        json.dumps(
+            {
+                "public_summary": {
+                    "candidate_id": "candidate",
+                    "task": "asr",
+                    "runtime_name": "runtime",
+                    "runtime_version": "1",
+                    "load_semantics": "resident_model",
+                    "workload_class": "private_course",
+                    "status": "complete",
+                    "counts": {"completed": 1, "failed": 0, "attempted": 1},
+                    "throughput": {
+                        "value": 1.0,
+                        "unit": "audio_hours_per_wall_hour",
+                    },
+                    "timing": {
+                        "steady_wall_seconds": 10.0,
+                        "target_wall_seconds": 10.0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    records_path = tmp_path / "private-records.jsonl"
+    records_path.write_text(
+        '{"sample_id":"sample","success":true}\n',
+        encoding="utf-8",
+    )
+
+    run_sustained._record_attempt_outcome(
+        common=_common(),
+        response_path=response_path,
+        private_records_path=records_path,
+        workload=workload,
+        workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
+        exit_code=0,
+        failure_kind=None,
+        wall_seconds=1.0,
+        process_resources={"sample_count": 1},
+        host_telemetry={"status": "observed"},
+    )
+
+    event = read_events(events_path)[0]
+    assert event["event"] == "sustained_attempt_failed"
+    assert event["failure_kind"] == "workload_content_changed"
+    assert not records_path.with_name("records-provenance.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("task", "phase", "payload"),
+    [
+        ("asr", "quality", b'{"success":true,"prediction":"ok"}\n'),
+        ("asr", "quality", b'{"sample_id":"unknown","success":true,"prediction":"ok"}\n'),
+        ("asr", "quality", b'{"sample_id":"sample","success":true,"success":true,"prediction":"ok"}\n'),
+        ("asr", "quality", b'{"sample_id":"sample","success":true,"value":1e999,"prediction":"ok"}\n'),
+        ("asr", "quality", b'{"sample_id":"sample","success":true}\n'),
+        ("ocr", "quality", b'{"sample_id":"sample","success":true}\n'),
+        ("asr", "quality", b'{"sample_id":"sample","success":true,"prediction":"ok"}\n{"sample_id":"sample","success":true,"prediction":"ok"}\n'),
+    ],
+)
+def test_private_record_validator_rejects_unusable_quality_artifacts(
+    task: str,
+    phase: str,
+    payload: bytes,
+) -> None:
+    with pytest.raises(ValueError, match="private"):
+        run_sustained._validate_private_records(
+            payload,
+            task=task,
+            phase=phase,
+            expected_sample_ids={"sample"},
+        )
+
+
+def test_private_record_validator_normalizes_excessive_json_nesting() -> None:
+    nested = b"[" * 10_000 + b"0" + b"]" * 10_000
+    payload = (
+        b'{"sample_id":"sample","success":true,"prediction":'
+        + nested
+        + b"}\n"
+    )
+
+    with pytest.raises(ValueError, match="private record line 1 is invalid"):
+        run_sustained._validate_private_records(
+            payload,
+            task="asr",
+            phase="quality",
+            expected_sample_ids={"sample"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("task", "phase", "payload", "expected"),
+    [
+        (
+            "asr",
+            "quality",
+            b'{"sample_id":"sample","success":true,"prediction":"ok"}\n',
+            {"attempted": 1, "completed": 1, "failed": 0},
+        ),
+        (
+            "ocr",
+            "quality",
+            b'{"sample_id":"sample","success":true,"lines":[{"text":"ok"}]}\n',
+            {"attempted": 1, "completed": 1, "failed": 0},
+        ),
+        (
+            "asr",
+            "sustained",
+            b'{"sample_id":"sample","success":true}\n{"sample_id":"sample","success":false}\n',
+            {"attempted": 2, "completed": 1, "failed": 1},
+        ),
+    ],
+)
+def test_private_record_validator_accepts_worker_record_shapes(
+    task: str,
+    phase: str,
+    payload: bytes,
+    expected: dict,
+) -> None:
+    assert run_sustained._validate_private_records(
+        payload,
+        task=task,
+        phase=phase,
+        expected_sample_ids={"sample"},
+    ) == expected
+
+
+def test_private_record_count_mismatch_does_not_write_provenance(tmp_path: Path) -> None:
+    records_path = tmp_path / "private-records.jsonl"
+    records_path.write_text(
+        '{"sample_id":"sample","success":true}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="counts do not match"):
+        run_sustained._write_records_provenance(
+            records_path,
+            _common(),
+            workload_fingerprint="c" * 64,
+            result_status="complete",
+            public_counts={"attempted": 2, "completed": 2, "failed": 0},
+            expected_sample_ids={"sample"},
+        )
+
+    assert not (tmp_path / "records-provenance.json").exists()
 
 
 def test_invalid_preview_field_becomes_generic_failure(tmp_path, monkeypatch):
@@ -172,7 +393,9 @@ def test_invalid_preview_field_becomes_generic_failure(tmp_path, monkeypatch):
         common=_common(),
         response_path=response_path,
         private_records_path=tmp_path / "missing-records.jsonl",
+        workload=_bound_outcome_workload(tmp_path),
         workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
         exit_code=0,
         failure_kind=None,
         wall_seconds=1.0,
@@ -196,7 +419,9 @@ def test_empty_summary_cannot_be_journaled_as_success(tmp_path, monkeypatch):
         common=_common(),
         response_path=response_path,
         private_records_path=tmp_path / "missing-records.jsonl",
+        workload=_bound_outcome_workload(tmp_path),
         workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
         exit_code=0,
         failure_kind=None,
         wall_seconds=1.0,
@@ -230,11 +455,45 @@ def test_unreadable_response_is_journaled_as_invalid_response(
         common=_common(),
         response_path=UnreadableResponse(),
         private_records_path=tmp_path / "missing-records.jsonl",
+        workload=_bound_outcome_workload(tmp_path),
         workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
         exit_code=0,
         failure_kind=None,
         wall_seconds=1.0,
         process_resources={"sample_count": 1},
+        host_telemetry={"status": "observed"},
+    )
+
+    event = read_events(events_path)[0]
+    assert event["event"] == "sustained_attempt_failed"
+    assert event["failure_kind"] == "invalid_response"
+
+
+def test_excessively_nested_response_is_journaled_as_invalid_response(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setattr(run_sustained, "SUSTAINED_EVENTS_PATH", events_path)
+    response_path = tmp_path / "response.json"
+    nested = "[" * 10_000 + "0" + "]" * 10_000
+    response_path.write_text(
+        '{"public_summary":' + nested + "}",
+        encoding="utf-8",
+    )
+
+    run_sustained._record_attempt_outcome(
+        common=_common(),
+        response_path=response_path,
+        private_records_path=tmp_path / "missing-records.jsonl",
+        workload=_bound_outcome_workload(tmp_path),
+        workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
+        exit_code=0,
+        failure_kind=None,
+        wall_seconds=1.0,
+        process_resources={},
         host_telemetry={"status": "observed"},
     )
 
@@ -276,13 +535,18 @@ def test_all_failed_summary_is_journaled_as_failure_and_not_success_provenance(
         encoding="utf-8",
     )
     private_records_path = tmp_path / "private-records.jsonl"
-    private_records_path.write_text("{}\n", encoding="utf-8")
+    private_records_path.write_text(
+        '{"sample_id":"sample","success":false}\n',
+        encoding="utf-8",
+    )
 
     run_sustained._record_attempt_outcome(
         common=_common(),
         response_path=response_path,
         private_records_path=private_records_path,
+        workload=_bound_outcome_workload(tmp_path),
         workload_fingerprint="c" * 64,
+        expected_sample_ids={"sample"},
         exit_code=0,
         failure_kind=None,
         wall_seconds=1.0,
@@ -298,6 +562,13 @@ def test_all_failed_summary_is_journaled_as_failure_and_not_success_provenance(
         (tmp_path / "records-provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["status"] == "all_failed"
+    run_sustained.verify_private_records_commitment(
+        private_records_path,
+        provenance,
+        records_sha256=provenance["records_sha256"],
+        private_commitment=provenance["private_records_commitment"],
+        public_commitment=event["private_artifact_commitment"],
+    )
 
 
 def test_success_cache_excludes_invalidated_and_noncomplete_attempts() -> None:
@@ -346,11 +617,19 @@ def _write_valid_private_resume_artifact(
     *,
     attempt_id: str = "11111111-1111-4111-8111-111111111111",
     attempt_key: str = "a" * 16,
-) -> tuple[Path, dict]:
+) -> tuple[Path, dict, list[dict]]:
     attempt_dir = candidate_dir / attempt_id
     attempt_dir.mkdir(parents=True)
     records_path = attempt_dir / "private-records.jsonl"
-    records_path.write_text("{}\n", encoding="utf-8")
+    records_path.write_text(
+        '{"sample_id":"sample","success":true}\n',
+        encoding="utf-8",
+    )
+    journal_workload = {
+        "workload_class": "private_course",
+        "item_count": 1,
+        "total_duration_seconds": 1.0,
+    }
     binding = {
         "protocol": "sustained-process-v1",
         "candidate_id": "candidate",
@@ -358,6 +637,7 @@ def _write_valid_private_resume_artifact(
         "config": {"processes": 1},
         "config_index": 0,
         "phase": "sustained",
+        "target_wall_seconds": 1.0,
         "trial_index": 0,
         "workload_class": "private_course",
         "workload_fingerprint": "c" * 64,
@@ -372,23 +652,69 @@ def _write_valid_private_resume_artifact(
         "attempt_id": attempt_id,
         "attempt_key": attempt_key,
         **binding,
-        "records_sha256": run_sustained._sha256(records_path),
     }
+    commitment = run_sustained.create_private_records_commitment(
+        records_path,
+        provenance,
+    )
+    provenance["records_sha256"] = commitment["records_sha256"]
+    provenance["private_records_commitment"] = commitment["private"]
     (attempt_dir / "records-provenance.json").write_text(
         json.dumps(provenance),
         encoding="utf-8",
     )
-    return attempt_dir, binding
+    public_common = {
+        key: provenance[key]
+        for key in (
+            "protocol",
+            "attempt_id",
+            "candidate_id",
+            "task",
+            "config",
+            "config_index",
+            "phase",
+            "target_wall_seconds",
+            "trial_index",
+            "code_fingerprint",
+            "environment_fingerprint",
+            "controller_environment_fingerprint",
+            "execution_policy_fingerprint",
+        )
+    }
+    public_common["workload"] = journal_workload
+    public_common["private_records_commitment_scheme"] = (
+        run_sustained.PRIVATE_RECORDS_COMMITMENT_SCHEME
+    )
+    start = {**public_common, "event": "sustained_attempt_started"}
+    terminal = {
+        **public_common,
+        "event": "sustained_attempt_succeeded",
+        "private_artifact_commitment": commitment["public"],
+        "result": {
+            "candidate_id": provenance["candidate_id"],
+            "task": provenance["task"],
+            "workload_class": provenance["workload_class"],
+            "status": "complete",
+            "counts": {"attempted": 1, "completed": 1, "failed": 0},
+        },
+    }
+    expected_binding = {
+        **binding,
+        "journal_workload": journal_workload,
+        "expected_sample_ids": ["sample"],
+    }
+    return attempt_dir, expected_binding, [start, terminal]
 
 
 def test_private_resumability_requires_hash_bound_matching_provenance(
     tmp_path: Path,
 ) -> None:
     candidate_dir = tmp_path / "candidate"
-    _, binding = _write_valid_private_resume_artifact(candidate_dir)
+    _, binding, sustained_events = _write_valid_private_resume_artifact(candidate_dir)
 
     assert run_sustained._successful_private_artifact_attempt_keys(
         candidate_dir,
+        sustained_events=sustained_events,
         invalidated_attempt_ids=set(),
         expected_bindings={"a" * 16: binding},
     ) == {"a" * 16}
@@ -406,12 +732,28 @@ def test_private_resumability_requires_hash_bound_matching_provenance(
         "partial_status",
         "public_workload",
         "malformed_provenance",
+        "extra_provenance_field",
+        "duplicate_provenance_key",
+        "overflowing_provenance_number",
+        "deeply_nested_provenance",
         "scalar_provenance",
         "non_utf8_provenance",
         "nonstr_workload_class",
         "nonstr_records_sha256",
         "controller_environment_changed",
         "execution_policy_changed",
+        "missing_start",
+        "missing_terminal",
+        "duplicate_terminal",
+        "start_identity_changed",
+        "terminal_identity_changed",
+        "terminal_counts_changed",
+        "terminal_tag_changed",
+        "records_recommitted",
+        "missing_sample_id_recommitted",
+        "unknown_sample_id_recommitted",
+        "duplicate_record_key_recommitted",
+        "nonfinite_record_recommitted",
     ),
 )
 def test_private_resumability_rejects_stale_or_mutated_artifacts(
@@ -419,7 +761,9 @@ def test_private_resumability_rejects_stale_or_mutated_artifacts(
     corruption: str,
 ) -> None:
     candidate_dir = tmp_path / "candidate"
-    attempt_dir, binding = _write_valid_private_resume_artifact(candidate_dir)
+    attempt_dir, binding, sustained_events = _write_valid_private_resume_artifact(
+        candidate_dir
+    )
     provenance_path = attempt_dir / "records-provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     invalidated_attempt_ids: set[str] = set()
@@ -449,6 +793,25 @@ def test_private_resumability_rejects_stale_or_mutated_artifacts(
         provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
     elif corruption == "malformed_provenance":
         provenance_path.write_text("{", encoding="utf-8")
+    elif corruption == "extra_provenance_field":
+        provenance["uncommitted_claim"] = 7
+        provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    elif corruption == "duplicate_provenance_key":
+        provenance_path.write_text(
+            json.dumps(provenance)[:-1] + ',"status":"succeeded"}',
+            encoding="utf-8",
+        )
+    elif corruption == "overflowing_provenance_number":
+        provenance_path.write_text(
+            json.dumps(provenance).replace('"target_wall_seconds": 1.0', '"target_wall_seconds": 1e999'),
+            encoding="utf-8",
+        )
+    elif corruption == "deeply_nested_provenance":
+        nested = "[" * 10_000 + "0" + "]" * 10_000
+        provenance_path.write_text(
+            '{"config":' + nested + "}",
+            encoding="utf-8",
+        )
     elif corruption == "scalar_provenance":
         provenance_path.write_text("null", encoding="utf-8")
     elif corruption == "non_utf8_provenance":
@@ -465,9 +828,57 @@ def test_private_resumability_rejects_stale_or_mutated_artifacts(
     elif corruption == "execution_policy_changed":
         provenance["execution_policy_fingerprint"] = "3" * 16
         provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    elif corruption == "missing_start":
+        sustained_events.pop(0)
+    elif corruption == "missing_terminal":
+        sustained_events.pop()
+    elif corruption == "duplicate_terminal":
+        sustained_events.append(json.loads(json.dumps(sustained_events[-1])))
+    elif corruption == "start_identity_changed":
+        sustained_events[0]["target_wall_seconds"] = 7199.0
+    elif corruption == "terminal_identity_changed":
+        sustained_events[-1]["candidate_id"] = "different-public-candidate"
+    elif corruption == "terminal_counts_changed":
+        sustained_events[-1]["result"]["counts"] = {
+            "attempted": 1,
+            "completed": 0,
+            "failed": 1,
+        }
+    elif corruption == "terminal_tag_changed":
+        sustained_events[-1]["private_artifact_commitment"]["hmac_sha256"] = (
+            "9" * 64
+        )
+    elif corruption in {
+        "records_recommitted",
+        "missing_sample_id_recommitted",
+        "unknown_sample_id_recommitted",
+        "duplicate_record_key_recommitted",
+        "nonfinite_record_recommitted",
+    }:
+        records_path = attempt_dir / "private-records.jsonl"
+        replacement = {
+            "records_recommitted": b'{"sample_id":"sample","success":true,"changed":true}\n',
+            "missing_sample_id_recommitted": b'{"success":true}\n',
+            "unknown_sample_id_recommitted": b'{"sample_id":"unknown","success":true}\n',
+            "duplicate_record_key_recommitted": b'{"sample_id":"sample","success":true,"success":true}\n',
+            "nonfinite_record_recommitted": b'{"sample_id":"sample","success":true,"value":1e999}\n',
+        }[corruption]
+        records_path.write_bytes(replacement)
+        provenance.pop("records_sha256")
+        provenance.pop("private_records_commitment")
+        commitment = run_sustained.create_private_records_commitment(
+            records_path,
+            provenance,
+        )
+        provenance["records_sha256"] = commitment["records_sha256"]
+        provenance["private_records_commitment"] = commitment["private"]
+        provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+        if corruption != "records_recommitted":
+            sustained_events[-1]["private_artifact_commitment"] = commitment["public"]
 
     assert run_sustained._successful_private_artifact_attempt_keys(
         candidate_dir,
+        sustained_events=sustained_events,
         invalidated_attempt_ids=invalidated_attempt_ids,
         expected_bindings={"a" * 16: binding},
     ) == set()
@@ -1070,10 +1481,19 @@ def test_candidate_sweep_stops_after_keyboard_interrupt(tmp_path, monkeypatch) -
         "worker": "worker.py",
         "configs": [{"processes": 1}, {"processes": 2}],
     }
+    sample_path = tmp_path / "sample.wav"
+    sample_bytes = b"sample"
+    sample_path.write_bytes(sample_bytes)
     workload = {
         "workload_class": "generated_quality_control",
-        "items": [{"id": "sample", "path": "sample.wav"}],
-        "warmup_item": {"id": "sample", "path": "sample.wav"},
+        "items": [{"id": "sample", "path": str(sample_path)}],
+        "warmup_item": {"id": "sample", "path": str(sample_path)},
+        "item_content_bindings": {
+            "sample": {
+                "content_sha256": hashlib.sha256(sample_bytes).hexdigest(),
+                "size_bytes": len(sample_bytes),
+            }
+        },
         "public_summary": {
             "workload_class": "generated_quality_control",
             "item_count": 1,
@@ -1092,11 +1512,10 @@ def test_candidate_sweep_stops_after_keyboard_interrupt(tmp_path, monkeypatch) -
     monkeypatch.setattr(run_sustained, "_python_for", lambda _name: Path(__file__))
     monkeypatch.setattr(run_sustained, "_verify_candidate_environment", lambda *_args: None)
     monkeypatch.setattr(run_sustained, "_verify_candidate_artifacts", lambda *_args: None)
-    monkeypatch.setattr(run_sustained, "read_events", lambda _path: [])
     monkeypatch.setattr(
         run_sustained,
-        "effective_sustained_invalidated_attempt_ids",
-        lambda _path: set(),
+        "read_sustained_journal_snapshot",
+        lambda _path: ([], set(), set()),
     )
     monkeypatch.setattr(
         run_sustained,
