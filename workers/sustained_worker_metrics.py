@@ -11,6 +11,8 @@ from pathlib import Path
 MINIMUM_STABILITY_WINDOW_COVERAGE = 0.8
 MINIMUM_STABLE_LAST_TO_FIRST_RATIO = 0.95
 MAXIMUM_STABLE_LAST_TO_FIRST_RATIO = 1.05
+STABILITY_PROTOCOL = "completion-window-v2"
+_WINDOW_BOUNDARY_TOLERANCE_SECONDS = 1e-9
 
 
 def build_public_summary(
@@ -50,11 +52,44 @@ def build_public_summary(
         steady_wall_seconds=steady_wall_seconds,
         target_wall_seconds=target_wall_seconds,
     )
-    analyzed_windows = [
-        window
-        for window in windows
-        if window["coverage"] >= MINIMUM_STABILITY_WINDOW_COVERAGE
-    ]
+    window_seconds = windows[0]["nominal_duration_seconds"] if windows else 0.0
+    first_completion_offset_seconds = (
+        max(0.0, min(record["completed_offset_seconds"] for record in successes))
+        if successes
+        else 0.0
+    )
+    pipeline_fill_evidence_seconds = max(
+        first_completion_offset_seconds,
+        max(0.0, _percentile(warmup_seconds, 0.95)),
+    )
+    if not windows:
+        pipeline_fill_window_count = 0
+    elif successes:
+        pipeline_fill_window_count = max(
+            1,
+            math.ceil(pipeline_fill_evidence_seconds / window_seconds),
+        )
+    else:
+        pipeline_fill_window_count = 1
+    analyzed_windows = []
+    discarded_pipeline_fill_window_count = 0
+    discarded_post_target_window_count = 0
+    discarded_low_coverage_window_count = 0
+    for index, window in enumerate(windows):
+        if index < pipeline_fill_window_count:
+            discarded_pipeline_fill_window_count += 1
+            continue
+        window_end_seconds = (index + 1) * window["nominal_duration_seconds"]
+        if (
+            window_end_seconds
+            > target_wall_seconds + _WINDOW_BOUNDARY_TOLERANCE_SECONDS
+        ):
+            discarded_post_target_window_count += 1
+            continue
+        if window["coverage"] < MINIMUM_STABILITY_WINDOW_COVERAGE:
+            discarded_low_coverage_window_count += 1
+            continue
+        analyzed_windows.append(window)
     rates = [window["rate"] for window in analyzed_windows]
     coefficient_of_variation = (
         statistics.pstdev(rates) / statistics.fmean(rates)
@@ -66,7 +101,7 @@ def build_public_summary(
         if len(rates) >= 2 and rates[0] > 0
         else None
     )
-    if len(rates) < 2:
+    if not successes or len(rates) < 2:
         stability_status = "insufficient"
     elif (
         failures == 0
@@ -122,11 +157,10 @@ def build_public_summary(
         },
         "throughput": throughput,
         "stability": {
+            "protocol": STABILITY_PROTOCOL,
             "stability_status": stability_status,
             "completion_event_attribution": True,
-            "window_seconds": (
-                windows[0]["nominal_duration_seconds"] if windows else 0.0
-            ),
+            "window_seconds": window_seconds,
             "minimum_window_coverage": MINIMUM_STABILITY_WINDOW_COVERAGE,
             "minimum_stable_last_to_first_ratio": (
                 MINIMUM_STABLE_LAST_TO_FIRST_RATIO
@@ -136,8 +170,21 @@ def build_public_summary(
             ),
             "observed_window_count": len(windows),
             "window_count": len(analyzed_windows),
+            "pipeline_fill_evidence_seconds": pipeline_fill_evidence_seconds,
+            "discarded_pipeline_fill_window_count": (
+                discarded_pipeline_fill_window_count
+            ),
+            "discarded_post_target_window_count": (
+                discarded_post_target_window_count
+            ),
+            "discarded_low_coverage_window_count": (
+                discarded_low_coverage_window_count
+            ),
             "discarded_partial_window_count": (
-                len(windows) - len(analyzed_windows)
+                sum(
+                    window["coverage"] < MINIMUM_STABILITY_WINDOW_COVERAGE
+                    for window in windows
+                )
             ),
             "zero_completion_window_count": sum(
                 window["completion_count"] == 0
